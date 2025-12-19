@@ -135,6 +135,92 @@ app.post('/api/export/chunk', upload.array('frames'), (req: Request, res: Respon
 });
 
 /**
+ * 2.5. Import from YouTube
+ * Downloads audio from a YouTube URL using yt-dlp and streams it back.
+ */
+app.post('/api/import/youtube', express.json(), async (req: Request, res: Response) => {
+  const { url } = req.body;
+
+  if (!url) {
+    res.status(400).json({ error: 'Missing YouTube URL' });
+    return;
+  }
+
+  // Basic URL validation
+  try {
+    new URL(url);
+  } catch (e) {
+    res.status(400).json({ error: 'Invalid URL' });
+    return;
+  }
+
+  const sessionId = Date.now().toString();
+  const sessionDir = getSessionDir(sessionId);
+
+  if (!fs.existsSync(sessionDir)) {
+    fs.mkdirSync(sessionDir, { recursive: true });
+  }
+
+  const outputTemplate = path.join(sessionDir, 'audio.%(ext)s');
+  const finalAudioPath = path.join(sessionDir, 'audio.mp3');
+
+  console.log(`[YouTube] Downloading: ${url}`);
+
+  // Arguments for yt-dlp
+  const args = [
+    '-x',                      // Extract audio
+    '--audio-format', 'mp3',   // Convert to mp3
+    '--audio-quality', '0',    // Best quality
+    '-o', outputTemplate,      // Output path template
+    url
+  ];
+
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const ytdlp = spawn('yt-dlp', args);
+
+      ytdlp.stderr.on('data', (data) => console.log(`[yt-dlp] ${data}`));
+
+      ytdlp.on('close', (code) => {
+        if (code === 0) resolve();
+        else reject(new Error(`yt-dlp exited with code ${code}`));
+      });
+
+      ytdlp.on('error', (err) => reject(err));
+    });
+
+    if (!fs.existsSync(finalAudioPath)) {
+      throw new Error('Download failed, file not found');
+    }
+
+    console.log(`[YouTube] Download complete for ${sessionId}`);
+
+    const stat = fs.statSync(finalAudioPath);
+    res.setHeader('Content-Type', 'audio/mpeg');
+    res.setHeader('Content-Length', stat.size);
+    res.setHeader('Content-Disposition', 'attachment; filename="youtube_audio.mp3"');
+
+    const readStream = fs.createReadStream(finalAudioPath);
+    readStream.pipe(res);
+
+    readStream.on('close', () => {
+      cleanupSession(sessionId);
+    });
+
+    readStream.on('error', (err) => {
+      console.error('[Stream Error]', err);
+      cleanupSession(sessionId);
+      if (!res.headersSent) res.status(500).end();
+    });
+
+  } catch (error: any) {
+    console.error('[YouTube Import Error]', error);
+    cleanupSession(sessionId);
+    res.status(500).json({ success: false, error: error.message || 'Failed to download from YouTube' });
+  }
+});
+
+/**
  * 3. Finalize and Render
  * Triggers FFmpeg to stitch images and audio into a video.
  * Streams the result back to the client and cleans up.

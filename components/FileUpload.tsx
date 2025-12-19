@@ -8,6 +8,8 @@ interface FileUploadProps {
 
 export const FileUpload: React.FC<FileUploadProps> = ({ onFileSelect, disabled }) => {
   const [isDragging, setIsDragging] = useState(false);
+  const [youtubeUrl, setYoutubeUrl] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleDragOver = (e: React.DragEvent) => {
@@ -22,7 +24,7 @@ export const FileUpload: React.FC<FileUploadProps> = ({ onFileSelect, disabled }
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault();
     setIsDragging(false);
-    
+
     if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
       validateAndPassFile(e.dataTransfer.files[0]);
     }
@@ -31,6 +33,33 @@ export const FileUpload: React.FC<FileUploadProps> = ({ onFileSelect, disabled }
   const handleFileInput = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
       validateAndPassFile(e.target.files[0]);
+    }
+  };
+
+  const handleYoutubeImport = async () => {
+    if (!youtubeUrl.trim()) return;
+
+    setIsLoading(true);
+    try {
+      const response = await fetch('http://localhost:3001/api/import/youtube', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: youtubeUrl })
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to import from YouTube');
+      }
+
+      const blob = await response.blob();
+      const file = new File([blob], "youtube_audio.mp3", { type: "audio/mpeg" });
+      validateAndPassFile(file);
+    } catch (error) {
+      console.error(error);
+      alert("Failed to import YouTube video. Make sure the server is running and yt-dlp is installed.");
+    } finally {
+      setIsLoading(false);
+      setYoutubeUrl('');
     }
   };
 
@@ -44,10 +73,10 @@ export const FileUpload: React.FC<FileUploadProps> = ({ onFileSelect, disabled }
   };
 
   return (
-    <div 
+    <div
       className={`relative border-2 border-dashed rounded-2xl p-10 text-center transition-all duration-300
-        ${isDragging 
-          ? 'border-cyan-400 bg-cyan-400/10 scale-[1.02]' 
+        ${isDragging
+          ? 'border-cyan-400 bg-cyan-400/10 scale-[1.02]'
           : 'border-slate-600 hover:border-slate-400 hover:bg-slate-800/50'
         }
         ${disabled ? 'opacity-50 pointer-events-none' : 'cursor-pointer'}
@@ -57,14 +86,14 @@ export const FileUpload: React.FC<FileUploadProps> = ({ onFileSelect, disabled }
       onDrop={handleDrop}
       onClick={() => fileInputRef.current?.click()}
     >
-      <input 
-        type="file" 
-        ref={fileInputRef} 
-        onChange={handleFileInput} 
-        accept="audio/*" 
-        className="hidden" 
+      <input
+        type="file"
+        ref={fileInputRef}
+        onChange={handleFileInput}
+        accept="audio/*"
+        className="hidden"
       />
-      
+
       <div className="flex flex-col items-center gap-4">
         <div className={`p-4 rounded-full ${isDragging ? 'bg-cyan-500/20' : 'bg-slate-700/50'}`}>
           <Music className={`w-12 h-12 ${isDragging ? 'text-cyan-400' : 'text-slate-400'}`} />
@@ -80,6 +109,25 @@ export const FileUpload: React.FC<FileUploadProps> = ({ onFileSelect, disabled }
         <div className="flex items-center gap-2 text-xs text-slate-500 mt-2">
           <AlertCircle size={14} />
           <span>Max file size recommended: 10MB</span>
+        </div>
+      </div>
+      <div className="mt-6 flex flex-col gap-2 relative z-10" onClick={(e) => e.stopPropagation()}>
+        <div className="flex gap-2">
+          <input
+            type="text"
+            value={youtubeUrl}
+            onChange={(e) => setYoutubeUrl(e.target.value)}
+            placeholder="Paste YouTube URL here..."
+            className="flex-1 bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-400 focus:outline-none focus:border-cyan-500"
+            disabled={isLoading || disabled}
+          />
+          <button
+            onClick={handleYoutubeImport}
+            disabled={isLoading || disabled || !youtubeUrl.trim()}
+            className="bg-cyan-600 hover:bg-cyan-500 disabled:opacity-50 disabled:cursor-not-allowed text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors"
+          >
+            {isLoading ? 'Downloading...' : 'Import'}
+          </button>
         </div>
       </div>
     </div>
