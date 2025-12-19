@@ -53,7 +53,7 @@ export const ImageGenerator: React.FC<ImageGeneratorProps> = ({ prompt, onImageG
             className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-105" 
           />
         ) : (
-          <div className="w-full h-full flex flex-col items-center justify-center text-slate-600 p-6 text-center bg-[url('https://www.transparenttextures.com/patterns/cubes.png')] bg-opacity-5">
+          <div className="w-full h-full flex flex-col items-center justify-center text-slate-600 p-6 text-center bg-[url('/cubes.png')] bg-opacity-5">
             {loading ? (
               <Loader2 className="w-10 h-10 animate-spin text-cyan-500 mb-2" />
             ) : (

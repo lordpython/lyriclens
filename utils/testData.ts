@@ -1,11 +1,9 @@
 import { SongData, ImagePrompt, GeneratedImage } from '../types';
 import { parseSRT } from './srtParser';
 
-// Browser-compatible test data (no Node.js fs module)
 export const createTestSongData = (): SongData => {
-  console.log('🎵 Creating test song data...');
+  console.log('🎵 Creating test song data from public assets...');
 
-  // Mock SRT content for "the true Saba"
   const srtContent = `1
 00:00:51,539 --> 00:00:57,289
 Oh, you who trick the soul with hopes that fade,
@@ -152,82 +150,48 @@ I only find the path when I refuse to be my passion's friend.`;
 
   const parsedSubtitles = parseSRT(srtContent);
 
-  // Mock prompts with timestamps
-  const prompts: ImagePrompt[] = [
-    {
-      id: 'prompt-test-0',
-      text: 'A melancholic scene representing the intro of the song',
-      mood: 'Intro - Melancholic',
-      timestamp: '00:00',
-      timestampSeconds: 0
-    },
-    {
-      id: 'prompt-test-1', 
-      text: 'A somber scene representing verse 1 of the song',
-      mood: 'Verse 1 - Somber',
-      timestamp: '00:51',
-      timestampSeconds: 51
-    },
-    {
-      id: 'prompt-test-2',
-      text: 'A contemplative scene representing verse 2 of the song', 
-      mood: 'Verse 2 - Contemplative',
-      timestamp: '01:59',
-      timestampSeconds: 119
-    },
-    {
-      id: 'prompt-test-3',
-      text: 'An urgent caution scene representing bridge 1 of the song',
-      mood: 'Bridge 1 - Urgent Caution', 
-      timestamp: '03:03',
-      timestampSeconds: 183
-    },
-    {
-      id: 'prompt-test-4',
-      text: 'A serene wonder scene representing the chorus/outro of the song',
-      mood: 'Chorus_Outro 1 - Serene Wonder',
-      timestamp: '03:23', 
-      timestampSeconds: 203
-    },
-    {
-      id: 'prompt-test-5',
-      text: 'An ethereal lament scene representing the interlude of the song',
-      mood: 'Interlude - Ethereal Lament',
-      timestamp: '03:49',
-      timestampSeconds: 229
-    }
+  // Map of image filenames to their metadata
+  const imageMetadata = [
+    { file: 'lyric-art-Intro - Melancholic.png', section: 'Intro', mood: 'Melancholic', time: 0 },
+    { file: 'lyric-art-Verse 1 - Somber.png', section: 'Verse 1', mood: 'Somber', time: 51 },
+    { file: 'lyric-art-Verse 2 - Contemplative.png', section: 'Verse 2', mood: 'Contemplative', time: 119 },
+    { file: 'lyric-art-Bridge 1 - Urgent Caution.png', section: 'Bridge 1', mood: 'Urgent Caution', time: 183 },
+    { file: 'lyric-art-Chorus_Outro 1 - Serene Wonder.png', section: 'Chorus_Outro 1', mood: 'Serene Wonder', time: 203 },
+    { file: 'lyric-art-Interlude - Ethereal Lament.png', section: 'Interlude', mood: 'Ethereal Lament', time: 229 },
+    { file: 'lyric-art-Verse 3 - Grand Melancholy.png', section: 'Verse 3', mood: 'Grand Melancholy', time: 289 },
+    { file: 'lyric-art-Bridge 2 - Hopeful Instruction.png', section: 'Bridge 2', mood: 'Hopeful Instruction', time: 298 },
+    { file: 'lyric-art-Verse 4 - Solitary Desolation.png', section: 'Verse 4', mood: 'Solitary Desolation', time: 326 },
+    { file: 'lyric-art-Outro 2 - Blissful Climax.png', section: 'Outro 2', mood: 'Blissful Climax', time: 340 },
+    { file: 'lyric-art-Outro 3 - Resolute Struggle.png', section: 'Outro 3', mood: 'Resolute Struggle', time: 364 }
   ];
 
-  // Mock generated images (placeholder data URLs)
-  const generatedImages: GeneratedImage[] = prompts.map(prompt => ({
-    promptId: prompt.id,
-    imageUrl: `data:image/svg+xml;base64,${btoa(`
-      <svg width="400" height="225" xmlns="http://www.w3.org/2000/svg">
-        <defs>
-          <linearGradient id="grad" x1="0%" y1="0%" x2="100%" y2="100%">
-            <stop offset="0%" style="stop-color:#1e293b;stop-opacity:1" />
-            <stop offset="100%" style="stop-color:#0f172a;stop-opacity:1" />
-          </linearGradient>
-        </defs>
-        <rect width="100%" height="100%" fill="url(#grad)"/>
-        <text x="50%" y="50%" text-anchor="middle" dy=".3em" fill="#22d3ee" font-family="Arial" font-size="14" font-weight="bold">
-          ${prompt.mood}
-        </text>
-        <text x="50%" y="70%" text-anchor="middle" dy=".3em" fill="#94a3b8" font-family="Arial" font-size="10">
-          ${prompt.timestamp}
-        </text>
-      </svg>
-    `)}`
+  const prompts: ImagePrompt[] = imageMetadata.map((meta, index) => ({
+    id: `prompt-test-${index}`,
+    text: `A ${meta.mood.toLowerCase()} scene representing the ${meta.section.toLowerCase()} of the song`,
+    mood: `${meta.section} - ${meta.mood}`,
+    timestamp: formatTimestamp(meta.time),
+    timestampSeconds: meta.time
   }));
 
-  console.log(`✨ Created ${prompts.length} test prompts with placeholder images`);
+  const generatedImages: GeneratedImage[] = imageMetadata.map((meta, index) => ({
+    promptId: `prompt-test-${index}`,
+    imageUrl: `/test_data/${meta.file}`
+  }));
+
+  console.log(`✨ Loaded ${prompts.length} test prompts with actual images`);
 
   return {
     fileName: 'the true Saba.mp3',
-    audioUrl: 'data:audio/mp3;base64,', // Placeholder - no actual audio in browser test
+    audioUrl: '/test_data/the true Saba.mp3',
     srtContent,
     parsedSubtitles,
     prompts,
     generatedImages
   };
+};
+
+const formatTimestamp = (seconds: number): string => {
+  const mins = Math.floor(seconds / 60);
+  const secs = Math.floor(seconds % 60);
+  return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
 };

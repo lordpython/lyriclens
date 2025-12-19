@@ -1,5 +1,6 @@
 import { GoogleGenAI, Type } from "@google/genai";
-import { ImagePrompt, SubtitleItem } from "../types";
+import { ImagePrompt, SubtitleItem, WordTiming } from "../types";
+import { parseSRTTimestamp } from "../utils/srtParser";
 
 const apiKey = process.env.API_KEY || '';
 const ai = new GoogleGenAI({ apiKey });
@@ -19,6 +20,135 @@ export const fileToGenerativePart = async (file: File): Promise<string> => {
   });
 };
 
+// Internal interface for Gemini's word-level response
+interface TranscriptionLine {
+  id: number;
+  startTime: number;
+  endTime: number;
+  text: string;
+  words: { word: string; start: number; end: number }[];
+}
+
+interface TranscriptionResponse {
+  lines: TranscriptionLine[];
+}
+
+/**
+ * Transcribe audio with word-level timing using Gemini.
+ * Returns structured SubtitleItem[] with optional word timing.
+ */
+export const transcribeAudioWithWordTiming = async (
+  base64Audio: string,
+  mimeType: string
+): Promise<SubtitleItem[]> => {
+  try {
+    const response = await ai.models.generateContent({
+      model: 'gemini-3-flash-preview',
+      contents: {
+        parts: [
+          {
+            inlineData: {
+              mimeType: mimeType,
+              data: base64Audio
+            }
+          },
+          {
+            text: `Transcribe the lyrics of this audio file with precise word-level timing.
+
+Return a JSON object with this exact structure:
+{
+  "lines": [
+    {
+      "id": 1,
+      "startTime": 0.0,
+      "endTime": 3.5,
+      "text": "Hello from the other side",
+      "words": [
+        {"word": "Hello", "start": 0.0, "end": 0.8},
+        {"word": "from", "start": 0.9, "end": 1.2},
+        {"word": "the", "start": 1.3, "end": 1.5},
+        {"word": "other", "start": 1.6, "end": 2.1},
+        {"word": "side", "start": 2.2, "end": 3.5}
+      ]
+    }
+  ]
+}
+
+Rules:
+1. Times are in SECONDS (decimals allowed, e.g., 1.5 = 1500ms)
+2. Each line should be a natural phrase or song line (what you'd show as a subtitle)
+3. word.start and word.end are the exact moments that specific word is sung
+4. Ensure words array covers the full startTime to endTime range
+5. Be precise - this is for karaoke-style highlighting`
+          }
+        ]
+      },
+      config: {
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            lines: {
+              type: Type.ARRAY,
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  id: { type: Type.INTEGER },
+                  startTime: { type: Type.NUMBER },
+                  endTime: { type: Type.NUMBER },
+                  text: { type: Type.STRING },
+                  words: {
+                    type: Type.ARRAY,
+                    items: {
+                      type: Type.OBJECT,
+                      properties: {
+                        word: { type: Type.STRING },
+                        start: { type: Type.NUMBER },
+                        end: { type: Type.NUMBER }
+                      },
+                      required: ["word", "start", "end"]
+                    }
+                  }
+                },
+                required: ["id", "startTime", "endTime", "text", "words"]
+              }
+            }
+          }
+        }
+      }
+    });
+
+    const jsonStr = response.text;
+    if (!jsonStr) throw new Error("No transcription generated");
+
+    const parsed: TranscriptionResponse = JSON.parse(jsonStr);
+
+    // Convert to SubtitleItem[] with WordTiming
+    return parsed.lines.map((line): SubtitleItem => ({
+      id: line.id,
+      startTime: line.startTime,
+      endTime: line.endTime,
+      text: line.text,
+      words: line.words.map((w): WordTiming => ({
+        word: w.word,
+        startTime: w.start,
+        endTime: w.end
+      }))
+    }));
+
+  } catch (error) {
+    console.error("Word-level transcription error:", error);
+    // Fallback to line-level transcription
+    console.warn("Falling back to line-level SRT transcription...");
+    const srt = await transcribeAudio(base64Audio, mimeType);
+    const { parseSRT } = await import('../utils/srtParser');
+    return parseSRT(srt);
+  }
+};
+
+/**
+ * Fallback: transcribe to SRT format (line-level timing only)
+ */
 export const transcribeAudio = async (base64Audio: string, mimeType: string): Promise<string> => {
   try {
     const response = await ai.models.generateContent({
@@ -46,31 +176,12 @@ export const transcribeAudio = async (base64Audio: string, mimeType: string): Pr
 
     const text = response.text;
     if (!text) throw new Error("No transcription generated");
-    
+
     // Cleanup simple markdown if model adds it despite instructions
     return text.replace(/^```srt\s*/i, '').replace(/^```\s*/i, '').replace(/```$/, '');
   } catch (error) {
     console.error("Transcription error:", error);
     throw error;
-  }
-};
-
-const parseTimeStringToSeconds = (timeStr: string): number => {
-  if (!timeStr) return 0;
-  try {
-    const clean = timeStr.trim().replace(',', '.');
-    const parts = clean.split(':').map(Number);
-    
-    if (parts.length === 3) {
-      if (parts[2] >= 60) {
-        return parts[0] * 60 + parts[1] + parts[2] / 1000;
-      }
-      return parts[0] * 3600 + parts[1] * 60 + parts[2];
-    }
-    if (parts.length === 2) return parts[0] * 60 + parts[1];
-    return 0;
-  } catch (e) {
-    return 0;
   }
 };
 
@@ -126,14 +237,14 @@ export const generatePromptsFromLyrics = async (srtContent: string, style: strin
 
     const jsonStr = response.text;
     if (!jsonStr) throw new Error("No prompts generated");
-    
+
     const parsed = JSON.parse(jsonStr);
-    
+
     // Add IDs for React keys and parse seconds
     return parsed.prompts.map((p: any, index: number) => ({
       ...p,
       id: `prompt-${Date.now()}-${index}`,
-      timestampSeconds: parseTimeStringToSeconds(p.timestamp)
+      timestampSeconds: parseSRTTimestamp(p.timestamp) ?? 0
     }));
 
   } catch (error) {
@@ -164,7 +275,7 @@ export const generateImageFromPrompt = async (promptText: string): Promise<strin
         return `data:image/png;base64,${part.inlineData.data}`;
       }
     }
-    
+
     throw new Error("No image data found in response");
   } catch (error) {
     console.error("Image generation error:", error);
@@ -172,15 +283,15 @@ export const generateImageFromPrompt = async (promptText: string): Promise<strin
   }
 };
 
-export const translateSubtitles = async (subtitles: SubtitleItem[], targetLanguage: string): Promise<{id: number, translation: string}[]> => {
+export const translateSubtitles = async (subtitles: SubtitleItem[], targetLanguage: string): Promise<{ id: number, translation: string }[]> => {
   try {
     // Minimize payload to just ID and Text to save tokens
     const simplifiedSubs = subtitles.map(s => ({ id: s.id, text: s.text }));
-    
+
     // Process in chunks if too large (simplified logic: take first 100 lines for safety in this demo)
     // In production, would iterate chunks.
-    const chunk = simplifiedSubs.slice(0, 150); 
-    
+    const chunk = simplifiedSubs.slice(0, 150);
+
     const response = await ai.models.generateContent({
       model: 'gemini-3-flash-preview',
       contents: `Translate the following song lyrics into ${targetLanguage}.
@@ -212,7 +323,7 @@ export const translateSubtitles = async (subtitles: SubtitleItem[], targetLangua
 
     const jsonStr = response.text;
     if (!jsonStr) throw new Error("No translation generated");
-    
+
     const parsed = JSON.parse(jsonStr);
     return parsed.translations;
 

@@ -1,9 +1,16 @@
+export interface WordTiming {
+  word: string;
+  startTime: number;  // seconds
+  endTime: number;    // seconds
+}
+
 export interface SubtitleItem {
   id: number;
   startTime: number;
   endTime: number;
   text: string;
   translation?: string;
+  words?: WordTiming[];  // Optional for backward-compat with word-level timing
 }
 
 export interface ImagePrompt {
