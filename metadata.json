@@ -1,0 +1,5 @@
+{
+  "name": "LyricLens",
+  "description": "Upload songs to automatically generate SRT subtitles and create thematic AI artwork based on the lyrics.",
+  "requestFramePermissions": []
+}
