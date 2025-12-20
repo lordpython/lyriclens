@@ -1,8 +1,8 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useMemo } from 'react';
 import { SubtitleItem } from '../types';
-import { ScrollArea } from "@/components/ui/scroll-area"
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { cn } from '@/lib/utils';
+import { motion } from 'framer-motion';
 
 interface TranscriptListProps {
   subtitles: SubtitleItem[];
@@ -17,8 +17,10 @@ export const TranscriptList: React.FC<TranscriptListProps> = ({
 }) => {
   const activeItemRef = useRef<HTMLDivElement>(null);
 
-  // Auto-scroll logic needs to target the viewport provided by ScrollArea
-  // Since ScrollArea wraps content, we rely on the ref to the active element to scroll it into view
+  const activeSubtitleId = useMemo(() => {
+    return subtitles.find(s => currentTime >= s.startTime && currentTime <= s.endTime)?.id;
+  }, [subtitles, currentTime]);
+
   useEffect(() => {
     if (activeItemRef.current) {
       activeItemRef.current.scrollIntoView({
@@ -26,9 +28,7 @@ export const TranscriptList: React.FC<TranscriptListProps> = ({
         block: 'center',
       });
     }
-  }, [
-    subtitles.find(s => currentTime >= s.startTime && currentTime <= s.endTime)?.id
-  ]);
+  }, [activeSubtitleId]);
 
   const formatTimestamp = (time: number) => {
     const mins = Math.floor(time / 60);
@@ -38,77 +38,77 @@ export const TranscriptList: React.FC<TranscriptListProps> = ({
   };
 
   return (
-    <Card className="h-[500px] bg-slate-800/50 border-slate-700 backdrop-blur-sm flex flex-col p-0 overflow-hidden">
-      <CardHeader className="p-4 bg-slate-900/80 border-b border-slate-700">
+    <Card className="h-full bg-transparent border-0 shadow-none flex flex-col p-0 overflow-hidden">
+      <CardHeader className="px-0 py-2 border-b border-border/50 mb-2">
         <div className="flex justify-between items-center">
-          <h3 className="text-sm font-semibold text-white uppercase tracking-wider">
+          <h3 className="text-xs font-bold text-muted-foreground uppercase tracking-widest">
             Transcription
           </h3>
-          <span className="text-xs text-slate-500 font-mono">{subtitles.length} lines</span>
+          <span className="text-[10px] text-muted-foreground font-mono bg-muted/50 px-2 py-0.5 rounded-full">{subtitles.length} lines</span>
         </div>
       </CardHeader>
 
-      <CardContent className="flex-1 p-0 overflow-hidden relative">
-        <ScrollArea className="h-full w-full p-2">
+      <CardContent className="flex-1 p-0 min-h-0 overflow-hidden relative">
+        <div className="h-full w-full overflow-y-auto pr-3">
           {subtitles.length === 0 ? (
-            <div className="flex flex-col items-center justify-center h-48 text-slate-500 gap-2">
+            <div className="flex flex-col items-center justify-center h-48 text-muted-foreground gap-2">
               <p className="text-sm">No transcript available.</p>
             </div>
           ) : (
-            <div className="space-y-1">
+            <div className="space-y-1 relative">
               {subtitles.map((sub) => {
                 const isActive = currentTime >= sub.startTime && currentTime <= sub.endTime;
                 return (
-                  <div
+                  <motion.div
+                    layout
                     key={sub.id}
                     ref={isActive ? activeItemRef : null}
                     onClick={() => onSeek(sub.startTime)}
                     className={cn(
-                      "group flex items-start gap-3 p-3 rounded-lg transition-all cursor-pointer border border-transparent text-sm",
-                      isActive
-                        ? 'bg-cyan-950/40 border-cyan-500/30 shadow-[inset_0_0_10px_rgba(34,211,238,0.1)]'
-                        : 'hover:bg-slate-800 hover:border-slate-700'
+                      "relative flex items-start gap-3 p-3 rounded-lg transition-colors cursor-pointer text-sm group",
+                      !isActive && 'hover:bg-muted/50'
                     )}
                   >
+                    {isActive && (
+                      <motion.div
+                        layoutId="active-transcript-item"
+                        className="absolute inset-0 bg-primary/10 border border-primary/20 rounded-lg shadow-sm"
+                        initial={false}
+                        transition={{ type: "spring", stiffness: 300, damping: 30 }}
+                      />
+                    )}
+
                     {/* Start Time */}
                     <div className={cn(
-                      "font-mono text-xs shrink-0 pt-0.5 w-20 text-right",
-                      isActive ? 'text-cyan-400' : 'text-slate-600 group-hover:text-slate-500'
+                      "relative font-mono text-[10px] shrink-0 pt-1 w-16 text-right transition-colors",
+                      isActive ? 'text-primary font-bold' : 'text-muted-foreground group-hover:text-foreground/70'
                     )}>
                       {formatTimestamp(sub.startTime)}
                     </div>
 
                     {/* Text Content */}
-                    <div className="flex-1 min-w-0">
+                    <div className="relative flex-1 min-w-0">
                       <p className={cn(
-                        "leading-relaxed",
-                        isActive ? 'text-cyan-50 font-medium' : 'text-slate-300 group-hover:text-slate-200'
+                        "leading-relaxed transition-colors",
+                        isActive ? 'text-foreground font-medium' : 'text-muted-foreground group-hover:text-foreground'
                       )}>
                         {sub.text}
                       </p>
                       {sub.translation && (
                         <p className={cn(
-                          "mt-1 text-xs italic",
-                          isActive ? 'text-cyan-300/80' : 'text-slate-500'
+                          "mt-1 text-xs italic transition-colors",
+                          isActive ? 'text-primary/70' : 'text-muted-foreground/70'
                         )}>
                           {sub.translation}
                         </p>
                       )}
                     </div>
-
-                    {/* End Time */}
-                    <div className={cn(
-                      "font-mono text-xs shrink-0 pt-0.5 w-20 text-right",
-                      isActive ? 'text-cyan-600/70' : 'text-slate-700 group-hover:text-slate-600'
-                    )}>
-                      {formatTimestamp(sub.endTime)}
-                    </div>
-                  </div>
+                  </motion.div>
                 );
               })}
             </div>
           )}
-        </ScrollArea>
+        </div>
       </CardContent>
     </Card>
   );

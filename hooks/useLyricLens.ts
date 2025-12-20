@@ -16,6 +16,8 @@ export function useLyricLens() {
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [isBulkGenerating, setIsBulkGenerating] = useState(false);
   const [contentType, setContentType] = useState<"music" | "story">("music");
+  const [globalSubject, setGlobalSubject] = useState("");
+  const [aspectRatio, setAspectRatio] = useState("16:9");
   
   // Translation State
   const [isTranslating, setIsTranslating] = useState(false);
@@ -83,7 +85,7 @@ export function useLyricLens() {
     });
   };
 
-  const handleGenerateAll = async () => {
+  const handleGenerateAll = async (selectedStyle: string, selectedAspectRatio: string) => {
     if (!songData || isBulkGenerating) return;
     setIsBulkGenerating(true);
 
@@ -93,7 +95,7 @@ export function useLyricLens() {
 
     for (const prompt of pendingPrompts) {
       try {
-        const base64 = await generateImageFromPrompt(prompt.text);
+        const base64 = await generateImageFromPrompt(prompt.text, selectedStyle, globalSubject, selectedAspectRatio);
         handleImageGenerated({ promptId: prompt.id, imageUrl: base64 });
       } catch (e) {
         console.error(`Failed to generate image for prompt ${prompt.id}`, e);
@@ -150,6 +152,8 @@ export function useLyricLens() {
     setErrorMsg(null);
     setIsBulkGenerating(false);
     setIsTranslating(false);
+    setGlobalSubject("");
+    setAspectRatio("16:9");
   };
 
   return {
@@ -159,6 +163,10 @@ export function useLyricLens() {
     isBulkGenerating,
     contentType,
     isTranslating,
+    globalSubject,
+    aspectRatio,
+    setAspectRatio,
+    setGlobalSubject,
     setContentType,
     handleFileSelect,
     handleImageGenerated,

@@ -122,9 +122,9 @@ export const FileUpload: React.FC<FileUploadProps> = ({ onFileSelect, disabled }
 
         <div className="w-full max-w-sm mt-8 relative z-10 space-y-3" onClick={(e) => e.stopPropagation()}>
           <div className="flex items-center gap-3 w-full my-2">
-            <div className="h-[1px] bg-slate-800 flex-1"></div>
+            <div className="h-px bg-slate-800 flex-1"></div>
             <span className="text-xs text-slate-500 font-medium">OR IMPORT FROM YOUTUBE</span>
-            <div className="h-[1px] bg-slate-800 flex-1"></div>
+            <div className="h-px bg-slate-800 flex-1"></div>
           </div>
 
           <div className="flex gap-2">

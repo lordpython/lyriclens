@@ -2,6 +2,7 @@ import { SongData } from '../types';
 import { extractFrequencyData } from '../utils/audioAnalysis';
 import { FFmpeg } from '@ffmpeg/ffmpeg';
 import { fetchFile, toBlobURL } from '@ffmpeg/util';
+import { applyPolyfills } from '../lib/utils';
 
 const SERVER_URL = 'http://localhost:3001';
 
@@ -20,9 +21,6 @@ export interface ExportConfig {
   fadeOutBeforeCut: boolean;     // Fade lyrics 0.3s before image transition
   wordLevelHighlight: boolean;   // Enable per-word karaoke vs. per-line
 }
-
-// Helper for linear interpolation
-const lerp = (start: number, end: number, t: number) => start * (1 - t) + end * t;
 
 const renderFrameToCanvas = (
   ctx: CanvasRenderingContext2D,
@@ -493,24 +491,7 @@ export const exportVideoWithFFmpeg = async (
   const ctx = canvas.getContext('2d')!;
 
   // Polyfill roundRect
-  if (!ctx.roundRect) {
-    ctx.roundRect = function (x: number, y: number, w: number, h: number, r: number) {
-      if (typeof r === 'number') {
-        if (w < 2 * r) r = w / 2;
-        if (h < 2 * r) r = h / 2;
-        this.beginPath();
-        this.moveTo(x + r, y);
-        this.arcTo(x + w, y, x + w, y + h, r);
-        this.arcTo(x + w, y + h, x, y + h, r);
-        this.arcTo(x, y + h, x, y, r);
-        this.arcTo(x, y, x + w, y, r);
-        this.closePath();
-      } else {
-        this.rect(x, y, w, h);
-      }
-      return this;
-    };
-  }
+  applyPolyfills(ctx);
 
   // 6. Render Loop with Batch Upload
   let previousFreqData: Uint8Array | null = null;
@@ -679,23 +660,7 @@ export const exportVideoClientSide = async (
   const ctx = canvas.getContext('2d')!;
 
   // Polyfill roundRect
-  if (!ctx.roundRect) {
-    ctx.roundRect = function (x: number, y: number, w: number, h: number, r: number) {
-        if (typeof r === 'number') {
-          if (w < 2 * r) r = w / 2;
-          if (h < 2 * r) r = h / 2;
-          this.beginPath();
-          this.moveTo(x + r, y);
-          this.arcTo(x + w, y, x + w, y + h, r);
-          this.arcTo(x + w, y + h, x, y + h, r);
-          this.arcTo(x, y + h, x, y, r);
-          this.arcTo(x, y, x + w, y, r);
-          this.closePath();
-        } else {
-          this.rect(x, y, w, h);
-        }
-    };
-  }
+  applyPolyfills(ctx);
 
   // 5. Render Loop
   let previousFreqData: Uint8Array | null = null;

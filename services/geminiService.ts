@@ -1,14 +1,12 @@
-import { GoogleGenAI, Type, HarmCategory, HarmBlockThreshold } from "@google/genai";
+import { GoogleGenAI, Type } from "@google/genai";
 import { ImagePrompt, SubtitleItem, WordTiming } from "../types";
 import { parseSRTTimestamp } from "../utils/srtParser";
 
 // --- Configuration ---
 const API_KEY = process.env.API_KEY || '';
 const MODELS = {
-  TEXT: 'gemini-3-flash-preview', // Updated to latest stable flash model if available, or keep preview
-  IMAGE: 'gemini-2.5-flash-image', // Using flash for images if supported, or falling back to specific image model
-  // Note: Using the specific models from the original file to ensure compatibility, 
-  // but moved to constants for easy updates.
+  TEXT: 'gemini-3-flash-preview',
+  IMAGE: 'gemini-2.5-flash-image',
   TRANSCRIPTION: 'gemini-3-pro-preview',
   TRANSLATION: 'gemini-3-flash-preview'
 };
@@ -19,7 +17,6 @@ const ai = new GoogleGenAI({ apiKey: API_KEY });
 
 /**
  * retry wrapper for AI calls.
- * Retries on 503 (Service Unavailable) or 429 (Too Many Requests).
  */
 async function withRetry<T>(
   fn: () => Promise<T>,
@@ -79,9 +76,6 @@ interface TranslationItem {
 
 // --- Main Services ---
 
-/**
- * Transcribe audio with word-level timing using Gemini.
- */
 export const transcribeAudioWithWordTiming = async (
   base64Audio: string,
   mimeType: string
@@ -176,9 +170,6 @@ export const transcribeAudioWithWordTiming = async (
   });
 };
 
-/**
- * Fallback: transcribe to SRT format.
- */
 export const transcribeAudio = async (base64Audio: string, mimeType: string): Promise<string> => {
   return withRetry(async () => {
     const response = await ai.models.generateContent({
@@ -202,23 +193,36 @@ export const transcribeAudio = async (base64Audio: string, mimeType: string): Pr
   });
 };
 
-export const generatePromptsFromLyrics = async (srtContent: string, style: string = "Cinematic"): Promise<ImagePrompt[]> => {
+const getPromptGenerationInstruction = (style: string, mode: 'lyrics' | 'story', content: string) => {
+  const baseInstruction = `Analyze this ${mode === 'lyrics' ? 'SRT lyrics' : 'spoken-word transcript'} to create a visual storyboard. Art Style: "${style}".`;
+  
+  const specificInstruction = mode === 'lyrics'
+    ? `1. Identify song structure.
+       2. Visual Consistency: maintain specific style without text/logos.
+       3. Generate 8-12 detailed prompts (60-100 words each).
+       4. Align timestamp with section start.`
+    : `1. Identify narrative segments (Intro, Scene changes, Key concepts).
+       2. Visual Consistency: maintain specific style. No text/logos.
+       3. Generate 8-12 detailed prompts (60-100 words each).
+       4. Align timestamp with the start of the concept/scene.`;
+
+  return `${baseInstruction}
+  
+  Instructions:
+  ${specificInstruction}
+
+  Content:
+  ${content.slice(0, 15000)} 
+
+  Return JSON object with 'prompts' array. Each item: { text, mood, timestamp }`;
+};
+
+const generatePrompts = async (srtContent: string, style: string, mode: 'lyrics' | 'story'): Promise<ImagePrompt[]> => {
   return withRetry(async () => {
     try {
       const response = await ai.models.generateContent({
         model: MODELS.TEXT,
-        contents: `Analyze these SRT lyrics to create a visual storyboard. Art Style: "${style}".
-        
-        Instructions:
-        1. Identify song structure.
-        2. Visual Consistency: maintain specific style without text/logos.
-        3. Generate 8-12 detailed prompts (60-100 words each).
-        4. Align timestamp with section start.
-  
-        SRT Content:
-        ${srtContent.slice(0, 15000)} 
-  
-        Return JSON object with 'prompts' array. Each item: { text, mood, timestamp }`,
+        contents: getPromptGenerationInstruction(style, mode, srtContent),
         config: {
           responseMimeType: "application/json",
           responseSchema: {
@@ -261,81 +265,51 @@ export const generatePromptsFromLyrics = async (srtContent: string, style: strin
   });
 };
 
-export const generatePromptsFromStory = async (srtContent: string, style: string = "Cinematic"): Promise<ImagePrompt[]> => {
+export const generatePromptsFromLyrics = (srtContent: string, style: string = "Cinematic") => 
+  generatePrompts(srtContent, style, 'lyrics');
+
+export const generatePromptsFromStory = (srtContent: string, style: string = "Cinematic") => 
+  generatePrompts(srtContent, style, 'story');
+
+export const generateImageFromPrompt = async (promptText: string, style: string = "Cinematic", globalSubject: string = "", aspectRatio: string = "16:9"): Promise<string> => {
   return withRetry(async () => {
-    try {
-      const response = await ai.models.generateContent({
-        model: MODELS.TEXT,
-        contents: `Analyze this spoken-word transcript (Story/Documentary/Ad) to create a visual storyboard. Art Style: "${style}".
-        
-        Instructions:
-        1. Identify narrative segments (Intro, Scene changes, Key concepts).
-        2. Visual Consistency: maintain specific style. No text/logos.
-        3. Generate 8-12 detailed prompts (60-100 words each).
-        4. Align timestamp with the start of the concept/scene.
-  
-        Transcript:
-        ${srtContent.slice(0, 15000)} 
-  
-        Return JSON object with 'prompts' array. Each item: { text, mood, timestamp }`,
-        config: {
-          responseMimeType: "application/json",
-          responseSchema: {
-            type: Type.OBJECT,
-            properties: {
-              prompts: {
-                type: Type.ARRAY,
-                items: {
-                  type: Type.OBJECT,
-                  properties: {
-                    text: { type: Type.STRING },
-                    mood: { type: Type.STRING },
-                    timestamp: { type: Type.STRING },
-                  },
-                  required: ["text", "mood", "timestamp"]
-                }
-              }
-            }
-          }
-        }
-      });
+    const styleModifiers: Record<string, string> = {
+      "Cinematic": "Cinematic movie still, 35mm film grain, anamorphic lens flare, hyper-realistic, dramatic lighting, 8k resolution",
+      "Anime / Manga": "High-quality Anime style, Studio Ghibli aesthetic, vibrant colors, detailed backgrounds, cel shaded, expressive",
+      "Cyberpunk": "Futuristic cyberpunk city style, neon lights, rain-slicked streets, high contrast, blade runner vibe, technological",
+      "Watercolor": "Soft watercolor painting, artistic brush strokes, paper texture, bleeding colors, dreamy atmosphere",
+      "Oil Painting": "Classic oil painting, thick impasto, visible brushwork, texture, rich colors, classical composition",
+      "Pixel Art": "High quality pixel art, 16-bit retro game style, dithering, vibrant colors",
+      "Surrealist": "Surrealist art style, dreamlike, Dali-esque, impossible geometry, symbolic, mysterious",
+      "Dark Fantasy": "Dark fantasy art, grimdark, gothic atmosphere, misty, detailed textures, eldritch",
+      "Commercial / Ad": "Professional product photography, studio lighting, clean background, macro details, commercial aesthetic, 4k, sharp focus, advertising standard",
+      "Minimalist / Tutorial": "Clean vector illustration, flat design, isometric perspective, white background, educational style, clear visibility, infographic aesthetic",
+      "Comic Book": "American comic book style, dynamic action lines, bold ink outlines, halftone patterns, vibrant superhero colors, expressive",
+      "Corporate / Brand": "Modern corporate memphis style, flat vector, clean lines, professional, trustworthy, blue and white color palette, tech startup aesthetic",
+      "Photorealistic": "Raw photo, hyper-realistic, DSLR, 50mm lens, depth of field, natural lighting, unedited footage style"
+    };
 
-      const jsonStr = response.text;
-      if (!jsonStr) throw new Error("No prompts generated");
+    const modifier = styleModifiers[style] || styleModifiers["Cinematic"];
+    const subjectContext = globalSubject ? `Main Subject: ${globalSubject}. ` : "";
+    
+    const finalPrompt = `
+      Create an image with this style: ${modifier}.
+      
+      Scene Content: ${subjectContext}${promptText}
+      
+      Requirements:
+      - High quality, professional composition.
+      - Adhere strictly to the requested art style.
+      - NO text, NO watermarks, NO logos, NO split screens.
+      - NO distorted anatomy or blurry faces.
+    `.trim();
 
-      const parsed = JSON.parse(jsonStr) as { prompts: PromptResponseItem[] };
-
-      return parsed.prompts.map((p, index: number) => ({
-        text: p.text,
-        mood: p.mood,
-        timestamp: p.timestamp,
-        id: `prompt-${Date.now()}-${index}`,
-        timestampSeconds: parseSRTTimestamp(p.timestamp) ?? 0
-      }));
-
-    } catch (error) {
-      console.error("Story prompt generation error:", error);
-      return [];
-    }
-  });
-};
-
-export const generateImageFromPrompt = async (promptText: string): Promise<string> => {
-  return withRetry(async () => {
     const response = await ai.models.generateContent({
-      model: MODELS.IMAGE, // Ensure this model supports image generation or use a specific one
-      contents: {
-        parts: [
-          { text: `High-quality digital art: ${promptText}` }
-        ]
-      },
-      // Note: 'imageConfig' might be specific to certain models/SDK versions. 
-      // If using a generic model, we might need a different approach, but keeping consistent with previous code.
+      model: MODELS.IMAGE,
+      contents: { parts: [{ text: finalPrompt }] },
       config: {
-        // @ts-ignore - SDK types might be lagging for experimental image fields
-        imageConfig: {
-          aspectRatio: "16:9"
-        }
+        // @ts-ignore
+        imageConfig: { aspectRatio: aspectRatio }
       }
     });
 
@@ -349,15 +323,10 @@ export const generateImageFromPrompt = async (promptText: string): Promise<strin
   });
 };
 
-/**
- * Translate subtitles with batching to handle long songs.
- */
 export const translateSubtitles = async (
   subtitles: SubtitleItem[],
   targetLanguage: string
 ): Promise<{ id: number, translation: string }[]> => {
-
-  // 1. Batching
   const BATCH_SIZE = 50;
   const simplifiedSubs = subtitles.map(s => ({ id: s.id, text: s.text }));
   const chunks = [];
@@ -408,13 +377,8 @@ export const translateSubtitles = async (
   };
 
   try {
-    // 2. Parallel Processing with concurrency limit could be added,
-    // but simplified Promise.all is okay for small batch counts (e.g. < 10 batches)
     const results = await Promise.all(chunks.map(chunk => processBatch(chunk)));
-
-    // 3. Flatten results
     return results.flat().sort((a, b) => a.id - b.id);
-
   } catch (error) {
     console.error("Translation error:", error);
     throw error;
