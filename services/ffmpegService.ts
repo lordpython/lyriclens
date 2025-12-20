@@ -1,5 +1,7 @@
 import { SongData } from '../types';
 import { extractFrequencyData } from '../utils/audioAnalysis';
+import { FFmpeg } from '@ffmpeg/ffmpeg';
+import { fetchFile, toBlobURL } from '@ffmpeg/util';
 
 const SERVER_URL = 'http://localhost:3001';
 
@@ -596,4 +598,160 @@ export const exportVideoWithFFmpeg = async (
   onProgress({ stage: 'complete', progress: 100, message: 'Export complete!' });
 
   return videoBlob;
+};
+
+export const exportVideoClientSide = async (
+  songData: SongData,
+  onProgress: ProgressCallback,
+  config: ExportConfig = {
+    orientation: 'landscape',
+    useModernEffects: true,
+    syncOffsetMs: -50,
+    fadeOutBeforeCut: true,
+    wordLevelHighlight: true
+  }
+): Promise<Blob> => {
+  const WIDTH = config.orientation === 'landscape' ? 1920 : 1080;
+  const HEIGHT = config.orientation === 'landscape' ? 1080 : 1920;
+  const FPS = 30;
+
+  onProgress({ stage: 'loading', progress: 0, message: 'Loading FFmpeg Core...' });
+
+  const ffmpeg = new FFmpeg();
+  const baseURL = 'https://unpkg.com/@ffmpeg/core@0.12.10/dist/esm';
+  
+  try {
+      await ffmpeg.load({
+          coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`, 'text/javascript'),
+          wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, 'application/wasm'),
+      });
+  } catch (e) {
+      console.error("FFmpeg load failed", e);
+      throw new Error("Failed to load FFmpeg. Check browser compatibility.");
+  }
+
+  onProgress({ stage: 'preparing', progress: 0, message: 'Analyzing audio...' });
+
+  // 1. Fetch and Decode Audio
+  const audioResponse = await fetch(songData.audioUrl);
+  const audioBlob = await audioResponse.blob();
+  const arrayBuffer = await audioBlob.arrayBuffer();
+  const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+  const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+
+  // Write audio to FFmpeg FS
+  await ffmpeg.writeFile('audio.mp3', await fetchFile(audioBlob));
+
+  // 2. Extract Frequency Data
+  const frequencyDataArray = await extractFrequencyData(audioBuffer, FPS);
+
+  onProgress({ stage: 'preparing', progress: 20, message: 'Loading high-res assets...' });
+
+  // 3. Preload images
+  const imageAssets: { time: number; img: HTMLImageElement }[] = [];
+  const sortedPrompts = [...songData.prompts].sort(
+    (a, b) => (a.timestampSeconds || 0) - (b.timestampSeconds || 0)
+  );
+
+  for (const prompt of sortedPrompts) {
+    const generated = songData.generatedImages.find(g => g.promptId === prompt.id);
+    if (generated) {
+      const img = new Image();
+      img.crossOrigin = "anonymous";
+      await new Promise<void>((resolve, reject) => {
+        img.onload = () => resolve();
+        img.onerror = reject;
+        img.src = generated.imageUrl;
+      });
+      imageAssets.push({ time: prompt.timestampSeconds || 0, img });
+    }
+  }
+
+  const duration = audioBuffer.duration;
+  const totalFrames = Math.ceil(duration * FPS);
+
+  onProgress({ stage: 'rendering', progress: 0, message: 'Rendering frames...' });
+
+  // 4. Create canvas
+  const canvas = document.createElement('canvas');
+  canvas.width = WIDTH;
+  canvas.height = HEIGHT;
+  const ctx = canvas.getContext('2d')!;
+
+  // Polyfill roundRect
+  if (!ctx.roundRect) {
+    ctx.roundRect = function (x: number, y: number, w: number, h: number, r: number) {
+        if (typeof r === 'number') {
+          if (w < 2 * r) r = w / 2;
+          if (h < 2 * r) r = h / 2;
+          this.beginPath();
+          this.moveTo(x + r, y);
+          this.arcTo(x + w, y, x + w, y + h, r);
+          this.arcTo(x + w, y + h, x, y + h, r);
+          this.arcTo(x, y + h, x, y, r);
+          this.arcTo(x, y, x + w, y, r);
+          this.closePath();
+        } else {
+          this.rect(x, y, w, h);
+        }
+    };
+  }
+
+  // 5. Render Loop
+  let previousFreqData: Uint8Array | null = null;
+
+  for (let frame = 0; frame < totalFrames; frame++) {
+    const currentTime = frame / FPS;
+    const freqData = frequencyDataArray[frame] || new Uint8Array(128).fill(0);
+
+    renderFrameToCanvas(
+      ctx,
+      WIDTH,
+      HEIGHT,
+      currentTime,
+      imageAssets,
+      songData.parsedSubtitles,
+      freqData,
+      previousFreqData,
+      config
+    );
+
+    previousFreqData = freqData;
+
+    // Convert canvas to binary for FFmpeg
+    // We use a lower quality JPEG for speed in WASM, or PNG for quality. 
+    // JPEG is much faster to encode.
+    const blob = await new Promise<Blob>((resolve) => {
+      canvas.toBlob(b => resolve(b!), 'image/jpeg', 0.90);
+    });
+    
+    const frameName = `frame${frame.toString().padStart(6, '0')}.jpg`;
+    await ffmpeg.writeFile(frameName, await fetchFile(blob));
+
+    // Update progress
+    if (frame % FPS === 0) {
+      const progress = Math.round((frame / totalFrames) * 80); 
+      onProgress({ stage: 'rendering', progress, message: `Rendering ${Math.floor(frame / FPS)}s / ${Math.floor(duration)}s` });
+    }
+  }
+
+  onProgress({ stage: 'encoding', progress: 85, message: 'Encoding MP4 (WASM)...' });
+
+  // 6. Run FFmpeg
+  await ffmpeg.exec([
+    '-framerate', String(FPS),
+    '-i', 'frame%06d.jpg',
+    '-i', 'audio.mp3',
+    '-c:v', 'libx264',
+    '-pix_fmt', 'yuv420p',
+    '-shortest',
+    '-preset', 'ultrafast', // Speed over size for browser
+    'output.mp4'
+  ]);
+
+  onProgress({ stage: 'complete', progress: 100, message: 'Done!' });
+
+  // 7. Read output
+  const data = await ffmpeg.readFile('output.mp4');
+  return new Blob([data], { type: 'video/mp4' });
 };

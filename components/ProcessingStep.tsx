@@ -1,6 +1,8 @@
 import React from 'react';
 import { Loader2, CheckCircle2, Circle } from 'lucide-react';
 import { AppState } from '../types';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { cn } from '@/lib/utils';
 
 interface ProcessingStepProps {
   currentStep: AppState;
@@ -28,9 +30,11 @@ export const ProcessingStep: React.FC<ProcessingStepProps> = ({ currentStep }) =
   if (currentStep === AppState.IDLE || currentStep === AppState.READY || currentStep === AppState.ERROR) return null;
 
   return (
-    <div className="w-full max-w-md mx-auto my-8 p-6 bg-slate-800/50 backdrop-blur-sm rounded-xl border border-slate-700">
-      <h3 className="text-center text-lg font-medium text-white mb-6">Processing your track...</h3>
-      <div className="space-y-4">
+    <Card className="w-full max-w-md mx-auto my-8 bg-slate-800/50 backdrop-blur-sm border-slate-700">
+      <CardHeader className="pb-4">
+        <CardTitle className="text-center text-lg font-medium text-white">Processing your track...</CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-4">
         {steps.map((step) => {
           const status = getStatus(step.id);
           return (
@@ -40,16 +44,17 @@ export const ProcessingStep: React.FC<ProcessingStepProps> = ({ currentStep }) =
                 {status === 'active' && <Loader2 className="w-6 h-6 text-cyan-400 animate-spin" />}
                 {status === 'pending' && <Circle className="w-6 h-6 text-slate-600" />}
               </div>
-              <span className={`text-sm font-medium ${
-                status === 'active' ? 'text-cyan-100' : 
-                status === 'completed' ? 'text-green-100/70 line-through' : 'text-slate-500'
-              }`}>
+              <span className={cn(
+                "text-sm font-medium transition-colors duration-300",
+                status === 'active' ? 'text-cyan-100' :
+                  status === 'completed' ? 'text-green-100/70 line-through' : 'text-slate-500'
+              )}>
                 {step.label}
               </span>
             </div>
           );
         })}
-      </div>
-    </div>
+      </CardContent>
+    </Card>
   );
 };

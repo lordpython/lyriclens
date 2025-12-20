@@ -5,10 +5,12 @@ import { ImageGenerator } from './components/ImageGenerator';
 import { TimelinePlayer } from './components/TimelinePlayer';
 import { TranscriptList } from './components/TranscriptList';
 import { VideoExportModal } from './components/VideoExportModal';
-import { AppState, SongData, GeneratedImage } from './types';
-import { transcribeAudioWithWordTiming, generatePromptsFromLyrics, fileToGenerativePart, generateImageFromPrompt, translateSubtitles } from './services/geminiService';
-import { parseSRT, subtitlesToSRT } from './utils/srtParser';
-import { Music, RefreshCw, Download, Video, Wand2, Loader2, Palette, Languages } from 'lucide-react';
+import { AppState } from './types';
+import { Music, RefreshCw, Download, Video, Wand2, Loader2, Palette, Languages, Speech } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { useLyricLens } from './hooks/useLyricLens';
 
 const ART_STYLES = [
   "Cinematic",
@@ -26,138 +28,48 @@ const LANGUAGES = [
 ];
 
 export default function App() {
-  const [appState, setAppState] = useState<AppState>(AppState.IDLE);
-  const [songData, setSongData] = useState<SongData | null>(null);
-  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  // Use the custom hook for business logic
+  const {
+    appState,
+    songData,
+    errorMsg,
+    isBulkGenerating,
+    contentType,
+    isTranslating,
+    setContentType,
+    handleFileSelect,
+    handleImageGenerated,
+    handleGenerateAll,
+    handleTranslate,
+    loadTestData,
+    resetApp
+  } = useLyricLens();
+
+  // UI-specific state
   const [showExportModal, setShowExportModal] = useState(false);
-  const [isBulkGenerating, setIsBulkGenerating] = useState(false);
   const [selectedStyle, setSelectedStyle] = useState("Cinematic");
-
-  // Translation State
   const [targetLang, setTargetLang] = useState("Spanish");
-  const [isTranslating, setIsTranslating] = useState(false);
-
-  // Audio Playback State
+  
+  // Audio Playback State (kept in UI as it drives the player directly)
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
 
-  const handleFileSelect = async (file: File) => {
-    try {
-      setErrorMsg(null);
-      setAppState(AppState.PROCESSING_AUDIO);
-
-      // 1. Setup local preview
-      const audioUrl = URL.createObjectURL(file);
-      const partialData: SongData = {
-        fileName: file.name,
-        audioUrl,
-        srtContent: '',
-        parsedSubtitles: [],
-        prompts: [],
-        generatedImages: []
-      };
-      setSongData(partialData);
-
-      // 2. Convert to Base64
-      const base64Audio = await fileToGenerativePart(file);
-
-      // 3. Transcribe with word-level timing
-      const parsedSubs = await transcribeAudioWithWordTiming(base64Audio, file.type);
-      // Generate SRT string for backward compat (downloads, prompts)
-      const srt = subtitlesToSRT(parsedSubs);
-
-      partialData.srtContent = srt;
-      partialData.parsedSubtitles = parsedSubs;
-      setSongData({ ...partialData });
-
-      setAppState(AppState.ANALYZING_LYRICS);
-
-      // 4. Generate Prompts with selected Style
-      const prompts = await generatePromptsFromLyrics(srt, selectedStyle);
-      partialData.prompts = prompts;
-      setSongData({ ...partialData });
-
-      setAppState(AppState.READY);
-    } catch (e: any) {
-      console.error(e);
-      setErrorMsg(e.message || "An unexpected error occurred.");
-      setAppState(AppState.ERROR);
-    }
+  // Wrapper handlers to pass UI state to the hook
+  const onFileSelect = (file: File) => {
+    handleFileSelect(file, selectedStyle);
   };
 
-  const handleImageGenerated = (newImg: GeneratedImage) => {
-    if (!songData) return;
-    setSongData(prev => {
-      if (!prev) return null;
-      if (prev.generatedImages.some(img => img.promptId === newImg.promptId)) return prev;
-
-      return {
-        ...prev,
-        generatedImages: [...prev.generatedImages, newImg]
-      };
-    });
+  const onTranslate = () => {
+    handleTranslate(targetLang);
   };
 
-  const handleGenerateAll = async () => {
-    if (!songData || isBulkGenerating) return;
-    setIsBulkGenerating(true);
-
-    const pendingPrompts = songData.prompts.filter(p =>
-      !songData.generatedImages.some(img => img.promptId === p.id)
-    );
-
-    for (const prompt of pendingPrompts) {
-      try {
-        const base64 = await generateImageFromPrompt(prompt.text);
-        handleImageGenerated({ promptId: prompt.id, imageUrl: base64 });
-      } catch (e) {
-        console.error(`Failed to generate image for prompt ${prompt.id}`, e);
-      }
-    }
-
-    setIsBulkGenerating(false);
-  };
-
-  const handleTranslate = async () => {
-    if (!songData || isTranslating) return;
-    setIsTranslating(true);
-    try {
-      const translations = await translateSubtitles(songData.parsedSubtitles, targetLang);
-
-      // Merge translations
-      const updatedSubs = songData.parsedSubtitles.map(sub => {
-        const trans = translations.find(t => t.id === sub.id);
-        return trans ? { ...sub, translation: trans.translation } : sub;
-      });
-
-      setSongData(prev => prev ? { ...prev, parsedSubtitles: updatedSubs } : null);
-    } catch (e) {
-      console.error("Translation failed", e);
-      alert("Translation failed. Please try again.");
-    } finally {
-      setIsTranslating(false);
-    }
-  };
-
-  const loadTestData = async () => {
-    try {
-      setErrorMsg(null);
-      setAppState(AppState.PROCESSING_AUDIO);
-
-      // Use browser-compatible test data
-      const { createTestSongData } = await import('./utils/testData');
-      const testData = createTestSongData();
-
-      setSongData(testData);
-      setAppState(AppState.READY);
-
-      console.log('✅ Test data loaded successfully');
-    } catch (e: any) {
-      console.error('Failed to load test data:', e);
-      setErrorMsg('Failed to load test data: ' + e.message);
-      setAppState(AppState.ERROR);
-    }
+  const onReset = () => {
+    resetApp();
+    setShowExportModal(false);
+    setIsPlaying(false);
+    setCurrentTime(0);
+    setDuration(0);
   };
 
   const downloadSRT = () => {
@@ -173,25 +85,13 @@ export default function App() {
     URL.revokeObjectURL(url);
   };
 
-  const resetApp = () => {
-    setAppState(AppState.IDLE);
-    setSongData(null);
-    setErrorMsg(null);
-    setIsPlaying(false);
-    setCurrentTime(0);
-    setDuration(0);
-    setShowExportModal(false);
-    setIsBulkGenerating(false);
-    setIsTranslating(false);
-  };
-
   return (
     <div className="min-h-screen bg-[#0f172a] text-slate-200 selection:bg-cyan-500/30">
 
       <header className="fixed top-0 w-full z-50 bg-[#0f172a]/80 backdrop-blur-md border-b border-slate-800">
         <div className="max-w-7xl mx-auto px-4 h-16 flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <div className="w-8 h-8 rounded-lg bg-gradient-to-tr from-cyan-500 to-blue-600 flex items-center justify-center">
+            <div className="w-8 h-8 rounded-lg bg-linear-to-tr from-cyan-500 to-blue-600 flex items-center justify-center">
               <Music className="text-white w-5 h-5" />
             </div>
             <h1 className="font-bold text-xl tracking-tight text-white">LyricLens</h1>
@@ -207,44 +107,62 @@ export default function App() {
         {appState === AppState.IDLE && (
           <div className="max-w-2xl mx-auto mt-20 fade-in">
             <div className="text-center mb-10">
-              <h2 className="text-4xl md:text-5xl font-bold text-white mb-4 bg-clip-text text-transparent bg-gradient-to-r from-cyan-400 to-purple-400">
-                Visualize Your Music
+              <h2 className="text-4xl md:text-5xl font-bold text-white mb-4 bg-clip-text text-transparent bg-linear-to-r from-cyan-400 to-purple-400">
+                Visualize Your Audio
               </h2>
               <p className="text-lg text-slate-400 mb-8">
-                Upload a song to automatically generate synchronized subtitles and create thematic artwork inspired by the lyrics.
+                Upload audio to automatically generate synchronized transcripts and create thematic artwork inspired by the content.
               </p>
 
-              {/* Style Selector */}
-              <div className="flex items-center justify-center gap-3 mb-8 bg-slate-800/50 p-2 rounded-xl inline-flex border border-slate-700">
-                <Palette size={18} className="text-slate-400 ml-2" />
-                <span className="text-sm text-slate-300 font-medium">Art Style:</span>
-                <select
-                  value={selectedStyle}
-                  onChange={(e) => setSelectedStyle(e.target.value)}
-                  className="bg-transparent text-white text-sm font-semibold focus:outline-none cursor-pointer p-1"
-                >
-                  {ART_STYLES.map(style => (
-                    <option key={style} value={style} className="bg-slate-800 text-white">
-                      {style}
-                    </option>
-                  ))}
-                </select>
+              <div className="flex flex-col sm:flex-row items-center justify-center gap-4 mb-8">
+                {/* Content Mode Selector */}
+                <div className="flex items-center gap-2 bg-slate-800/50 p-1 pl-3 rounded-xl border border-slate-700">
+                  {contentType === 'music' ? <Music size={18} className="text-slate-400" /> : <Speech size={18} className="text-slate-400" />}
+                  <span className="text-sm text-slate-300 font-medium shrink-0">Mode:</span>
+                  <Select value={contentType} onValueChange={(val: "music" | "story") => setContentType(val)}>
+                    <SelectTrigger className="w-[140px] h-8 bg-transparent border-0 text-white font-semibold focus:ring-0 focus:ring-offset-0 px-2 shadow-none">
+                      <SelectValue placeholder="Select mode" />
+                    </SelectTrigger>
+                    <SelectContent className="bg-slate-800 border-slate-700 text-slate-200">
+                      <SelectItem value="music" className="focus:bg-slate-700 focus:text-white cursor-pointer">Music Video</SelectItem>
+                      <SelectItem value="story" className="focus:bg-slate-700 focus:text-white cursor-pointer">Story / Speech</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                {/* Style Selector */}
+                <div className="flex items-center gap-2 bg-slate-800/50 p-1 pl-3 rounded-xl border border-slate-700">
+                  <Palette size={18} className="text-slate-400" />
+                  <span className="text-sm text-slate-300 font-medium shrink-0">Style:</span>
+                  <Select value={selectedStyle} onValueChange={setSelectedStyle}>
+                    <SelectTrigger className="w-[160px] h-8 bg-transparent border-0 text-white font-semibold focus:ring-0 focus:ring-offset-0 px-2 shadow-none">
+                      <SelectValue placeholder="Select style" />
+                    </SelectTrigger>
+                    <SelectContent className="bg-slate-800 border-slate-700 text-slate-200">
+                      {ART_STYLES.map(style => (
+                        <SelectItem key={style} value={style} className="focus:bg-slate-700 focus:text-white cursor-pointer">
+                          {style}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
               </div>
             </div>
             <FileUpload
-              onFileSelect={handleFileSelect}
+              onFileSelect={onFileSelect}
               disabled={false}
             />
 
             {/* Test Data Button */}
             <div className="text-center mt-6">
-              <button
+              <Button
                 onClick={loadTestData}
-                className="px-6 py-3 bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-500 hover:to-pink-500 text-white font-semibold rounded-xl transition-all shadow-lg shadow-purple-900/30 flex items-center gap-2 mx-auto"
+                className="px-6 py-6 bg-linear-to-r from-purple-600 to-pink-600 hover:from-purple-500 hover:to-pink-500 text-white font-semibold rounded-xl transition-all shadow-lg shadow-purple-900/30 w-auto text-base"
               >
-                <Music size={18} />
+                <Music size={18} className="mr-2" />
                 Load Test Data
-              </button>
+              </Button>
               <p className="text-xs text-slate-500 mt-2">
                 Loads "the true Saba" with pre-generated artwork
               </p>
@@ -258,12 +176,13 @@ export default function App() {
               <div className="max-w-md mx-auto p-6 bg-red-500/10 border border-red-500/20 rounded-xl text-center">
                 <h3 className="text-red-400 font-bold mb-2">Error Processing File</h3>
                 <p className="text-sm text-red-200 mb-4">{errorMsg}</p>
-                <button
-                  onClick={resetApp}
-                  className="px-4 py-2 bg-red-600 hover:bg-red-500 text-white rounded-lg text-sm font-medium transition-colors"
+                <Button
+                  onClick={onReset}
+                  variant="destructive"
+                  className="bg-red-600 hover:bg-red-500"
                 >
                   Try Again
-                </button>
+                </Button>
               </div>
             ) : (
               <ProcessingStep currentStep={appState} />
@@ -278,23 +197,29 @@ export default function App() {
               <div className="flex items-center justify-between">
                 <h2 className="font-semibold text-white truncate max-w-[200px]" title={songData.fileName}>{songData.fileName}</h2>
                 <div className="flex gap-2">
-                  <button
+                  <Button
                     onClick={downloadSRT}
-                    className="text-xs text-slate-400 hover:text-white flex items-center gap-1 transition-colors bg-slate-800 px-2 py-1 rounded"
+                    variant="outline" // Using secondary/outline with custom styling override if needed, or just keeping it consistent
+                    className="text-xs text-slate-400 hover:text-white border-slate-700 bg-slate-800 h-8"
                     title="Download SRT"
                   >
-                    <Download size={14} /> <span className="hidden sm:inline">SRT</span>
-                  </button>
-                  <button
+                    <Download size={14} className="mr-1" /> <span className="hidden sm:inline">SRT</span>
+                  </Button>
+                  <Button
                     onClick={() => setShowExportModal(true)}
-                    className="text-xs text-white bg-cyan-600 hover:bg-cyan-500 flex items-center gap-1 transition-colors px-2 py-1 rounded shadow-lg shadow-cyan-900/20 font-medium"
+                    className="text-xs text-white bg-cyan-600 hover:bg-cyan-500 border-0 shadow-lg shadow-cyan-900/20 font-medium h-8"
                     title="Export Video"
                   >
-                    <Video size={14} /> <span className="hidden sm:inline">Export Video</span>
-                  </button>
-                  <button onClick={resetApp} className="text-xs text-slate-400 hover:text-cyan-400 flex items-center gap-1 transition-colors bg-slate-800 px-2 py-1 rounded">
+                    <Video size={14} className="mr-1" /> <span className="hidden sm:inline">Export Video</span>
+                  </Button>
+                  <Button
+                    onClick={onReset}
+                    variant="ghost"
+                    size="icon"
+                    className="text-slate-400 hover:text-cyan-400 bg-slate-800 h-8 w-8"
+                  >
                     <RefreshCw size={14} />
-                  </button>
+                  </Button>
                 </div>
               </div>
 
@@ -312,24 +237,28 @@ export default function App() {
               />
 
               {/* Translation Controls */}
-              <div className="flex items-center gap-2 bg-slate-800/50 p-3 rounded-xl border border-slate-700">
-                <Languages size={18} className="text-slate-400" />
-                <select
-                  value={targetLang}
-                  onChange={(e) => setTargetLang(e.target.value)}
-                  className="bg-transparent text-sm text-white font-medium focus:outline-none flex-1"
-                >
-                  {LANGUAGES.map(lang => (
-                    <option key={lang} value={lang} className="bg-slate-800">{lang}</option>
-                  ))}
-                </select>
-                <button
-                  onClick={handleTranslate}
+              <div className="flex items-center gap-2 bg-slate-800/50 p-1.5 pl-3 rounded-xl border border-slate-700">
+                <Languages size={18} className="text-slate-400 shrink-0" />
+                <Select value={targetLang} onValueChange={setTargetLang}>
+                  <SelectTrigger className="w-full h-8 bg-transparent border-0 text-white font-medium focus:ring-0 focus:ring-offset-0 px-2 shadow-none">
+                    <SelectValue placeholder="Language" />
+                  </SelectTrigger>
+                  <SelectContent className="bg-slate-800 border-slate-700 text-slate-200">
+                    {LANGUAGES.map(lang => (
+                      <SelectItem key={lang} value={lang} className="focus:bg-slate-700 focus:text-white">
+                        {lang}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <Button
+                  onClick={onTranslate}
                   disabled={isTranslating}
-                  className="text-xs px-3 py-1.5 bg-slate-700 hover:bg-slate-600 rounded-lg text-white font-medium transition-colors disabled:opacity-50"
+                  size="sm"
+                  className="px-3 bg-slate-700 hover:bg-slate-600 text-white font-medium h-8"
                 >
                   {isTranslating ? <Loader2 size={14} className="animate-spin" /> : 'Translate'}
-                </button>
+                </Button>
               </div>
 
               <TranscriptList
@@ -347,26 +276,26 @@ export default function App() {
                 <div>
                   <div className="flex items-center gap-2 mb-1">
                     <h3 className="text-xl font-bold text-white">Visual Storyboard</h3>
-                    <span className="text-xs px-2 py-0.5 rounded-full bg-slate-700 text-slate-300 border border-slate-600">
+                    <Badge variant="secondary" className="bg-slate-700 text-slate-300 border-slate-600 hover:bg-slate-600">
                       {selectedStyle}
-                    </span>
+                    </Badge>
                   </div>
                   <p className="text-slate-400 text-sm">
-                    Generated image patch based on song structure ({songData.prompts.length} scenes).
+                    Generated image patch based on {contentType === 'music' ? 'song' : 'narrative'} structure ({songData.prompts.length} scenes).
                   </p>
                 </div>
 
-                <button
+                <Button
                   onClick={handleGenerateAll}
                   disabled={isBulkGenerating}
-                  className="flex items-center justify-center gap-2 px-4 py-2 bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 disabled:opacity-50 text-white text-sm font-bold rounded-xl transition-all shadow-lg shadow-indigo-900/30 whitespace-nowrap"
+                  className="bg-linear-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 disabled:opacity-50 text-white text-sm font-bold shadow-lg shadow-indigo-900/30 whitespace-nowrap border-0"
                 >
                   {isBulkGenerating ? (
-                    <><Loader2 size={16} className="animate-spin" /> Generating All...</>
+                    <><Loader2 size={16} className="animate-spin mr-2" /> Generating All...</>
                   ) : (
-                    <><Wand2 size={16} /> Generate All Art</>
+                    <><Wand2 size={16} className="mr-2" /> Generate All Art</>
                   )}
-                </button>
+                </Button>
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
@@ -384,7 +313,7 @@ export default function App() {
 
                 {songData.prompts.length === 0 && (
                   <div className="col-span-2 p-12 text-center border border-dashed border-slate-700 rounded-xl">
-                    <p className="text-slate-500">No prompts could be generated from the lyrics.</p>
+                    <p className="text-slate-500">No prompts could be generated from the transcript.</p>
                   </div>
                 )}
               </div>
@@ -396,6 +325,7 @@ export default function App() {
           <VideoExportModal
             songData={songData}
             onClose={() => setShowExportModal(false)}
+            isOpen={true}
           />
         )}
 

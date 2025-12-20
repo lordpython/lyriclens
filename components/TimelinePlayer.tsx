@@ -1,6 +1,9 @@
-import React, { useRef, useEffect, useState, useMemo } from 'react';
+import React, { useRef, useEffect, useState } from 'react';
 import { Play, Pause, RotateCcw, Activity, Circle, Waves, Sparkles } from 'lucide-react';
 import { SubtitleItem } from '../types';
+import { Button } from '@/components/ui/button';
+import { cn } from '@/lib/utils';
+import { Card } from '@/components/ui/card';
 
 interface TimelinePlayerProps {
   audioUrl: string;
@@ -473,7 +476,7 @@ export const TimelinePlayer: React.FC<TimelinePlayerProps> = ({
   ];
 
   return (
-    <div className="flex flex-col gap-4 bg-slate-800/80 border border-slate-700 rounded-2xl p-6 shadow-xl backdrop-blur-sm">
+    <Card className="flex flex-col gap-4 bg-slate-800/80 border-slate-700 p-6 shadow-xl backdrop-blur-sm">
       <audio
         ref={audioRef}
         src={audioUrl}
@@ -498,17 +501,19 @@ export const TimelinePlayer: React.FC<TimelinePlayerProps> = ({
         {/* Visualizer Controls (Top Right, Hidden unless hovered) */}
         <div className="absolute top-4 right-4 z-20 flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity duration-300">
           {visuals.map((v) => (
-            <button
+            <Button
               key={v.id}
+              variant="outline"
+              size="icon"
               onClick={() => setVisualizerMode(v.id as VisualizerMode)}
-              className={`p-2 rounded-lg backdrop-blur-md border transition-all ${visualizerMode === v.id
-                  ? 'bg-cyan-500/20 border-cyan-400 text-cyan-400'
-                  : 'bg-black/40 border-slate-700 text-slate-400 hover:text-white hover:bg-slate-800'
-                }`}
+              className={cn(
+                "h-8 w-8 hover:bg-slate-800",
+                visualizerMode === v.id ? "bg-cyan-500/20 border-cyan-400 text-cyan-400" : "bg-black/40 border-slate-700 text-slate-400"
+              )}
               title={v.label}
             >
               <v.icon size={16} />
-            </button>
+            </Button>
           ))}
         </div>
 
@@ -590,20 +595,22 @@ export const TimelinePlayer: React.FC<TimelinePlayerProps> = ({
           </div>
 
           <div className="flex items-center gap-6">
-            <button
+            <Button
+              variant="ghost"
+              size="icon"
               onClick={() => onSeek(0)}
-              className="p-2.5 rounded-full text-slate-400 hover:text-white hover:bg-slate-700/50 transition-all"
+              className="rounded-full text-slate-400 hover:text-white hover:bg-slate-700/50"
               title="Restart"
             >
               <RotateCcw size={18} />
-            </button>
+            </Button>
 
-            <button
+            <Button
               onClick={onPlayPause}
-              className="w-14 h-14 rounded-full bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-white flex items-center justify-center transition-all active:scale-95 shadow-lg shadow-cyan-900/30 border border-cyan-400/20"
+              className="w-14 h-14 rounded-full bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-white flex items-center justify-center transition-all active:scale-95 shadow-lg shadow-cyan-900/30 border border-cyan-400/20 p-0"
             >
               {isPlaying ? <Pause size={24} fill="currentColor" /> : <Play size={24} fill="currentColor" className="ml-1" />}
-            </button>
+            </Button>
           </div>
 
           <div className="text-xs font-mono text-slate-500 w-20 text-right">
@@ -611,6 +618,6 @@ export const TimelinePlayer: React.FC<TimelinePlayerProps> = ({
           </div>
         </div>
       </div>
-    </div>
+    </Card>
   );
 };

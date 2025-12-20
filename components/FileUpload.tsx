@@ -1,5 +1,9 @@
 import React, { useRef, useState } from 'react';
-import { Upload, Music, AlertCircle } from 'lucide-react';
+import { Upload, Music, AlertCircle, Youtube } from 'lucide-react';
+import { Card, CardContent } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { cn } from '@/lib/utils';
 
 interface FileUploadProps {
   onFileSelect: (file: File) => void;
@@ -73,63 +77,98 @@ export const FileUpload: React.FC<FileUploadProps> = ({ onFileSelect, disabled }
   };
 
   return (
-    <div
-      className={`relative border-2 border-dashed rounded-2xl p-10 text-center transition-all duration-300
-        ${isDragging
-          ? 'border-cyan-400 bg-cyan-400/10 scale-[1.02]'
-          : 'border-slate-600 hover:border-slate-400 hover:bg-slate-800/50'
-        }
-        ${disabled ? 'opacity-50 pointer-events-none' : 'cursor-pointer'}
-      `}
+    <Card
+      className={cn(
+        "relative transition-all duration-300 border-2 border-dashed overflow-hidden",
+        isDragging ? "border-cyan-400 bg-cyan-400/5 ring-4 ring-cyan-400/10" : "border-slate-700 hover:border-slate-500 hover:bg-slate-800/50",
+        disabled && "opacity-50 pointer-events-none"
+      )}
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
-      onClick={() => fileInputRef.current?.click()}
     >
-      <input
-        type="file"
-        ref={fileInputRef}
-        onChange={handleFileInput}
-        accept="audio/*"
-        className="hidden"
-      />
+      <CardContent className="flex flex-col items-center justify-center p-10 select-none">
+        <input
+          type="file"
+          ref={fileInputRef}
+          onChange={handleFileInput}
+          accept="audio/*"
+          className="hidden"
+        />
 
-      <div className="flex flex-col items-center gap-4">
-        <div className={`p-4 rounded-full ${isDragging ? 'bg-cyan-500/20' : 'bg-slate-700/50'}`}>
-          <Music className={`w-12 h-12 ${isDragging ? 'text-cyan-400' : 'text-slate-400'}`} />
+        <div className="flex flex-col items-center gap-4 cursor-pointer" onClick={() => fileInputRef.current?.click()}>
+          <div className={cn(
+            "p-5 rounded-full transition-all duration-500",
+            isDragging ? "bg-cyan-500/20 scale-110" : "bg-slate-800"
+          )}>
+            <Music className={cn(
+              "w-12 h-12 transition-colors",
+              isDragging ? "text-cyan-400" : "text-slate-400"
+            )} />
+          </div>
+          <div className="text-center">
+            <h3 className="text-xl font-semibold text-foreground mb-2">
+              Upload your song
+            </h3>
+            <p className="text-slate-400 text-sm max-w-[260px]">
+              Drag & drop an MP3 or WAV file, or click to browse
+            </p>
+          </div>
+          <div className="flex items-center gap-2 text-xs text-slate-500 mt-2 bg-slate-800/50 px-3 py-1 rounded-full">
+            <AlertCircle size={14} />
+            <span>Max file size recommended: 10MB</span>
+          </div>
         </div>
-        <div>
-          <h3 className="text-xl font-semibold text-white mb-2">
-            Upload your song
-          </h3>
-          <p className="text-slate-400">
-            Drag & drop an MP3 or WAV file, or click to browse
-          </p>
+
+        <div className="w-full max-w-sm mt-8 relative z-10 space-y-3" onClick={(e) => e.stopPropagation()}>
+          <div className="flex items-center gap-3 w-full my-2">
+            <div className="h-[1px] bg-slate-800 flex-1"></div>
+            <span className="text-xs text-slate-500 font-medium">OR IMPORT FROM YOUTUBE</span>
+            <div className="h-[1px] bg-slate-800 flex-1"></div>
+          </div>
+
+          <div className="flex gap-2">
+            <div className="relative flex-1">
+              <Youtube className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
+              <Input
+                type="text"
+                value={youtubeUrl}
+                onChange={(e) => setYoutubeUrl(e.target.value)}
+                placeholder="Paste YouTube URL here..."
+                className="pl-9 bg-slate-900/50 border-slate-700"
+                disabled={isLoading || disabled}
+              />
+            </div>
+            <Button
+              onClick={handleYoutubeImport}
+              disabled={isLoading || disabled || !youtubeUrl.trim()}
+              className="bg-red-600 hover:bg-red-500 text-white"
+            >
+              {isLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Import'}
+            </Button>
+          </div>
         </div>
-        <div className="flex items-center gap-2 text-xs text-slate-500 mt-2">
-          <AlertCircle size={14} />
-          <span>Max file size recommended: 10MB</span>
-        </div>
-      </div>
-      <div className="mt-6 flex flex-col gap-2 relative z-10" onClick={(e) => e.stopPropagation()}>
-        <div className="flex gap-2">
-          <input
-            type="text"
-            value={youtubeUrl}
-            onChange={(e) => setYoutubeUrl(e.target.value)}
-            placeholder="Paste YouTube URL here..."
-            className="flex-1 bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-400 focus:outline-none focus:border-cyan-500"
-            disabled={isLoading || disabled}
-          />
-          <button
-            onClick={handleYoutubeImport}
-            disabled={isLoading || disabled || !youtubeUrl.trim()}
-            className="bg-cyan-600 hover:bg-cyan-500 disabled:opacity-50 disabled:cursor-not-allowed text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors"
-          >
-            {isLoading ? 'Downloading...' : 'Import'}
-          </button>
-        </div>
-      </div>
-    </div>
+      </CardContent>
+    </Card>
   );
 };
+
+// Simple loader icon since lucide-react might strictly export named icons
+function Loader2({ className }: { className?: string }) {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      width="24"
+      height="24"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+    >
+      <path d="M21 12a9 9 0 1 1-6.219-8.56" />
+    </svg>
+  );
+}

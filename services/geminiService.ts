@@ -261,6 +261,65 @@ export const generatePromptsFromLyrics = async (srtContent: string, style: strin
   });
 };
 
+export const generatePromptsFromStory = async (srtContent: string, style: string = "Cinematic"): Promise<ImagePrompt[]> => {
+  return withRetry(async () => {
+    try {
+      const response = await ai.models.generateContent({
+        model: MODELS.TEXT,
+        contents: `Analyze this spoken-word transcript (Story/Documentary/Ad) to create a visual storyboard. Art Style: "${style}".
+        
+        Instructions:
+        1. Identify narrative segments (Intro, Scene changes, Key concepts).
+        2. Visual Consistency: maintain specific style. No text/logos.
+        3. Generate 8-12 detailed prompts (60-100 words each).
+        4. Align timestamp with the start of the concept/scene.
+  
+        Transcript:
+        ${srtContent.slice(0, 15000)} 
+  
+        Return JSON object with 'prompts' array. Each item: { text, mood, timestamp }`,
+        config: {
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              prompts: {
+                type: Type.ARRAY,
+                items: {
+                  type: Type.OBJECT,
+                  properties: {
+                    text: { type: Type.STRING },
+                    mood: { type: Type.STRING },
+                    timestamp: { type: Type.STRING },
+                  },
+                  required: ["text", "mood", "timestamp"]
+                }
+              }
+            }
+          }
+        }
+      });
+
+      const jsonStr = response.text;
+      if (!jsonStr) throw new Error("No prompts generated");
+
+      const parsed = JSON.parse(jsonStr) as { prompts: PromptResponseItem[] };
+
+      return parsed.prompts.map((p, index: number) => ({
+        text: p.text,
+        mood: p.mood,
+        timestamp: p.timestamp,
+        id: `prompt-${Date.now()}-${index}`,
+        timestampSeconds: parseSRTTimestamp(p.timestamp) ?? 0
+      }));
+
+    } catch (error) {
+      console.error("Story prompt generation error:", error);
+      return [];
+    }
+  });
+};
+
 export const generateImageFromPrompt = async (promptText: string): Promise<string> => {
   return withRetry(async () => {
     const response = await ai.models.generateContent({
