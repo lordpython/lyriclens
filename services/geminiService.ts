@@ -202,9 +202,54 @@ export const transcribeAudio = async (base64Audio: string, mimeType: string): Pr
   });
 };
 
-export const generatePromptsFromLyrics = async (srtContent: string, style: string = "Cinematic"): Promise<ImagePrompt[]> => {
+/**
+ * Calculates the optimal number of image prompts based on song duration.
+ * - Approximately 1 prompt per 20 seconds
+ * - Minimum: 4 prompts (for very short songs)
+ * - Maximum: 30 prompts (for very long songs)
+ */
+const calculatePromptCount = (durationSeconds: number): { min: number; max: number } => {
+  const idealCount = Math.round(durationSeconds / 20); // 1 prompt per 20 seconds
+  const min = Math.max(4, Math.min(idealCount - 2, 28)); // Minimum 4, allow some variance
+  const max = Math.max(6, Math.min(idealCount + 2, 30)); // Maximum 30, allow some variance
+  return { min, max };
+};
+
+/**
+ * Extracts the maximum timestamp from SRT content to estimate song duration.
+ */
+const estimateDurationFromSRT = (srtContent: string): number => {
+  // Match SRT timestamps like "00:03:45,123" or "00:03:45.123"
+  const timestampRegex = /(\d{2}):(\d{2}):(\d{2})[,.](\d{3})/g;
+  let maxDuration = 0;
+  let match;
+
+  while ((match = timestampRegex.exec(srtContent)) !== null) {
+    const hours = parseInt(match[1], 10);
+    const minutes = parseInt(match[2], 10);
+    const seconds = parseInt(match[3], 10);
+    const ms = parseInt(match[4], 10);
+    const totalSeconds = hours * 3600 + minutes * 60 + seconds + ms / 1000;
+    maxDuration = Math.max(maxDuration, totalSeconds);
+  }
+
+  // If no timestamps found, default to 3 minutes
+  return maxDuration > 0 ? maxDuration : 180;
+};
+
+export const generatePromptsFromLyrics = async (
+  srtContent: string,
+  style: string = "Cinematic",
+  songDurationSeconds?: number
+): Promise<ImagePrompt[]> => {
   return withRetry(async () => {
     try {
+      // Calculate duration - use provided value or estimate from SRT
+      const duration = songDurationSeconds ?? estimateDurationFromSRT(srtContent);
+      const { min: minPrompts, max: maxPrompts } = calculatePromptCount(duration);
+
+      console.log(`Song duration: ${duration.toFixed(1)}s - Generating ${minPrompts}-${maxPrompts} prompts`);
+
       const response = await ai.models.generateContent({
         model: MODELS.TEXT,
         contents: `Analyze these SRT lyrics to create a visual storyboard. Art Style: "${style}".
@@ -212,8 +257,9 @@ export const generatePromptsFromLyrics = async (srtContent: string, style: strin
         Instructions:
         1. Identify song structure.
         2. Visual Consistency: maintain specific style without text/logos.
-        3. Generate 8-12 detailed prompts (60-100 words each).
+        3. Generate ${minPrompts}-${maxPrompts} detailed prompts (60-100 words each).
         4. Align timestamp with section start.
+        5. Space prompts evenly across the song duration (~${Math.round(duration / ((minPrompts + maxPrompts) / 2))} seconds apart).
   
         SRT Content:
         ${srtContent.slice(0, 15000)} 
@@ -261,9 +307,19 @@ export const generatePromptsFromLyrics = async (srtContent: string, style: strin
   });
 };
 
-export const generatePromptsFromStory = async (srtContent: string, style: string = "Cinematic"): Promise<ImagePrompt[]> => {
+export const generatePromptsFromStory = async (
+  srtContent: string,
+  style: string = "Cinematic",
+  contentDurationSeconds?: number
+): Promise<ImagePrompt[]> => {
   return withRetry(async () => {
     try {
+      // Calculate duration - use provided value or estimate from SRT
+      const duration = contentDurationSeconds ?? estimateDurationFromSRT(srtContent);
+      const { min: minPrompts, max: maxPrompts } = calculatePromptCount(duration);
+
+      console.log(`Content duration: ${duration.toFixed(1)}s - Generating ${minPrompts}-${maxPrompts} prompts`);
+
       const response = await ai.models.generateContent({
         model: MODELS.TEXT,
         contents: `Analyze this spoken-word transcript (Story/Documentary/Ad) to create a visual storyboard. Art Style: "${style}".
@@ -271,8 +327,9 @@ export const generatePromptsFromStory = async (srtContent: string, style: string
         Instructions:
         1. Identify narrative segments (Intro, Scene changes, Key concepts).
         2. Visual Consistency: maintain specific style. No text/logos.
-        3. Generate 8-12 detailed prompts (60-100 words each).
+        3. Generate ${minPrompts}-${maxPrompts} detailed prompts (60-100 words each).
         4. Align timestamp with the start of the concept/scene.
+        5. Space prompts evenly across the content duration (~${Math.round(duration / ((minPrompts + maxPrompts) / 2))} seconds apart).
   
         Transcript:
         ${srtContent.slice(0, 15000)} 

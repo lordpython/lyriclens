@@ -1,14 +1,31 @@
 import { useState } from 'react';
 import { AppState, SongData, GeneratedImage } from '../types';
-import { 
-  transcribeAudioWithWordTiming, 
-  generatePromptsFromLyrics, 
-  generatePromptsFromStory, 
-  fileToGenerativePart, 
-  generateImageFromPrompt, 
-  translateSubtitles 
+import {
+  transcribeAudioWithWordTiming,
+  generatePromptsFromLyrics,
+  generatePromptsFromStory,
+  fileToGenerativePart,
+  generateImageFromPrompt,
+  translateSubtitles
 } from '../services/geminiService';
 import { subtitlesToSRT } from '../utils/srtParser';
+
+/**
+ * Helper to get audio duration from a URL.
+ * Returns duration in seconds.
+ */
+const getAudioDuration = (audioUrl: string): Promise<number> => {
+  return new Promise((resolve, reject) => {
+    const audio = new Audio(audioUrl);
+    audio.addEventListener('loadedmetadata', () => {
+      resolve(audio.duration);
+    });
+    audio.addEventListener('error', (e) => {
+      console.warn('Could not load audio metadata, defaulting to 180s:', e);
+      resolve(180); // Default to 3 minutes if we can't get duration
+    });
+  });
+};
 
 export function useLyricLens() {
   const [appState, setAppState] = useState<AppState>(AppState.IDLE);
@@ -16,7 +33,7 @@ export function useLyricLens() {
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [isBulkGenerating, setIsBulkGenerating] = useState(false);
   const [contentType, setContentType] = useState<"music" | "story">("music");
-  
+
   // Translation State
   const [isTranslating, setIsTranslating] = useState(false);
 
@@ -27,6 +44,10 @@ export function useLyricLens() {
 
       // 1. Setup local preview
       const audioUrl = URL.createObjectURL(file);
+
+      // Get audio duration for dynamic prompt count
+      const audioDuration = await getAudioDuration(audioUrl);
+
       const partialData: SongData = {
         fileName: file.name,
         audioUrl,
@@ -51,14 +72,14 @@ export function useLyricLens() {
 
       setAppState(AppState.ANALYZING_LYRICS);
 
-      // 4. Generate Prompts based on Content Type
+      // 4. Generate Prompts based on Content Type (with song duration for dynamic prompt count)
       let prompts;
       if (contentType === 'story') {
-        prompts = await generatePromptsFromStory(srt, selectedStyle);
+        prompts = await generatePromptsFromStory(srt, selectedStyle, audioDuration);
       } else {
-        prompts = await generatePromptsFromLyrics(srt, selectedStyle);
+        prompts = await generatePromptsFromLyrics(srt, selectedStyle, audioDuration);
       }
-      
+
       partialData.prompts = prompts;
       setSongData({ ...partialData });
 
