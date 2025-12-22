@@ -3,12 +3,19 @@ import { ImagePrompt, SubtitleItem, WordTiming } from "../types";
 import { parseSRTTimestamp } from "../utils/srtParser";
 
 // --- Configuration ---
-const API_KEY = process.env.API_KEY || '';
+// Prefer the documented env var, but keep backward compatibility.
+const API_KEY =
+  process.env.GEMINI_API_KEY ||
+  process.env.VITE_GEMINI_API_KEY ||
+  process.env.API_KEY ||
+  "";
+
 const MODELS = {
-  TEXT: 'gemini-3-flash-preview',
-  IMAGE: 'gemini-2.5-flash-image',
-  TRANSCRIPTION: 'gemini-3-pro-preview',
-  TRANSLATION: 'gemini-3-flash-preview'
+  TEXT: "gemini-3-flash-preview",
+  IMAGE: "gemini-2.5-flash-image",
+  VIDEO: "veo-3.0-fast-generate-001", // Use Veo 3 fast model for video generation
+  TRANSCRIPTION: "gemini-3-flash-preview",
+  TRANSLATION: "gemini-3-flash-preview",
 };
 
 const ai = new GoogleGenAI({ apiKey: API_KEY });
@@ -22,14 +29,21 @@ async function withRetry<T>(
   fn: () => Promise<T>,
   retries = 3,
   delayMs = 1000,
-  backoffFactor = 2
+  backoffFactor = 2,
 ): Promise<T> {
   try {
     return await fn();
   } catch (error: any) {
-    if (retries > 0 && (error.status === 503 || error.status === 429 || error.message?.includes('fetch failed'))) {
-      console.warn(`API call failed. Retrying in ${delayMs}ms... (${retries} attempts left). Error: ${error.message}`);
-      await new Promise(resolve => setTimeout(resolve, delayMs));
+    if (
+      retries > 0 &&
+      (error.status === 503 ||
+        error.status === 429 ||
+        error.message?.includes("fetch failed"))
+    ) {
+      console.warn(
+        `API call failed. Retrying in ${delayMs}ms... (${retries} attempts left). Error: ${error.message}`,
+      );
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
       return withRetry(fn, retries - 1, delayMs * backoffFactor, backoffFactor);
     }
     throw error;
@@ -41,13 +55,257 @@ export const fileToGenerativePart = async (file: File): Promise<string> => {
     const reader = new FileReader();
     reader.onloadend = () => {
       const base64String = reader.result as string;
-      const base64Data = base64String.split(',')[1];
+      const base64Data = base64String.split(",")[1];
       resolve(base64Data);
     };
     reader.onerror = reject;
     reader.readAsDataURL(file);
   });
 };
+
+type PromptRefinementIntent =
+  | "auto"
+  | "more_detailed"
+  | "more_cinematic"
+  | "more_consistent_subject"
+  | "shorten"
+  | "fix_repetition";
+
+type PromptLintIssueCode =
+  | "too_short"
+  | "too_long"
+  | "repetitive"
+  | "missing_subject"
+  | "contains_text_instruction"
+  | "contains_logos_watermarks"
+  | "weak_visual_specificity";
+
+interface PromptLintIssue {
+  code: PromptLintIssueCode;
+  message: string;
+  severity: "warn" | "error";
+}
+
+const DEFAULT_NEGATIVE_CONSTRAINTS = [
+  "no text",
+  "no subtitles",
+  "no watermark",
+  "no logo",
+  "no brand names",
+  "no split-screen",
+  "no collage",
+  "no UI elements",
+  "no distorted anatomy",
+  "no extra limbs",
+  "no deformed hands",
+  "no blurry face",
+  "no melted faces",
+];
+
+function normalizeForSimilarity(s: string): string {
+  return s
+    .toLowerCase()
+    .replace(/[`"'.,!?;:()[\]{}]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function countWords(s: string): number {
+  const t = s.trim();
+  if (!t) return 0;
+  return t.split(/\s+/).length;
+}
+
+function jaccardSimilarity(a: string, b: string): number {
+  const sa = new Set(normalizeForSimilarity(a).split(" ").filter(Boolean));
+  const sb = new Set(normalizeForSimilarity(b).split(" ").filter(Boolean));
+  if (sa.size === 0 && sb.size === 0) return 1;
+  if (sa.size === 0 || sb.size === 0) return 0;
+
+  let inter = 0;
+  for (const w of sa) if (sb.has(w)) inter++;
+  const union = sa.size + sb.size - inter;
+  return union === 0 ? 0 : inter / union;
+}
+
+function lintPrompt(params: {
+  promptText: string;
+  globalSubject?: string;
+  previousPrompts?: string[];
+}): PromptLintIssue[] {
+  const { promptText, globalSubject, previousPrompts } = params;
+  const issues: PromptLintIssue[] = [];
+
+  const words = countWords(promptText);
+
+  if (words < 18) {
+    issues.push({
+      code: "too_short",
+      message:
+        "Prompt is very short; add setting, lighting, camera/composition, and mood to reduce generic outputs.",
+      severity: "warn",
+    });
+  }
+
+  if (words > 180) {
+    issues.push({
+      code: "too_long",
+      message:
+        "Prompt is very long; consider removing redundant adjectives to reduce model confusion.",
+      severity: "warn",
+    });
+  }
+
+  const norm = normalizeForSimilarity(promptText);
+
+  if (/\btext\b|\bsubtitles\b|\bcaption\b|\btypography\b/.test(norm)) {
+    issues.push({
+      code: "contains_text_instruction",
+      message:
+        "Prompt mentions text/subtitles/typography; this often causes unwanted text in images.",
+      severity: "warn",
+    });
+  }
+
+  if (/\blogo\b|\bwatermark\b|\bbrand\b/.test(norm)) {
+    issues.push({
+      code: "contains_logos_watermarks",
+      message:
+        "Prompt mentions logos/watermarks/brands; this often increases unwanted marks in images.",
+      severity: "warn",
+    });
+  }
+
+  const hasVisualAnchors =
+    /\b(lighting|lit|glow|neon|sunset|dawn|fog|mist|smoke)\b/.test(norm) ||
+    /\b(close-up|wide shot|medium shot|portrait|overhead|low angle|high angle)\b/.test(
+      norm,
+    ) ||
+    /\b(color palette|palette|monochrome|pastel|vibrant|muted)\b/.test(norm) ||
+    /\b(depth of field|bokeh|lens|35mm|50mm|anamorphic)\b/.test(norm);
+
+  if (!hasVisualAnchors) {
+    issues.push({
+      code: "weak_visual_specificity",
+      message:
+        "Prompt lacks visual anchors (camera, lighting, palette). Add at least 1–2 to improve composition consistency.",
+      severity: "warn",
+    });
+  }
+
+  if (globalSubject && globalSubject.trim().length > 0) {
+    const subjNorm = normalizeForSimilarity(globalSubject);
+    const subjectTokens = subjNorm.split(" ").filter(Boolean);
+    const missingCount = subjectTokens.filter(
+      (t) => t.length >= 4 && !norm.includes(t),
+    ).length;
+
+    // If the prompt doesn't echo enough of the subject, consistency tends to drift.
+    if (
+      subjectTokens.length >= 2 &&
+      missingCount / subjectTokens.length > 0.6
+    ) {
+      issues.push({
+        code: "missing_subject",
+        message:
+          "Prompt doesn’t strongly reference your Global Subject; this can cause character/object drift across scenes.",
+        severity: "warn",
+      });
+    }
+  }
+
+  if (previousPrompts && previousPrompts.length > 0) {
+    const sims = previousPrompts.map((p) => jaccardSimilarity(p, promptText));
+    const maxSim = Math.max(...sims);
+    if (maxSim >= 0.72) {
+      issues.push({
+        code: "repetitive",
+        message:
+          "Prompt is very similar to another scene; vary setting/camera/lighting to avoid repetitive images.",
+        severity: "warn",
+      });
+    }
+  }
+
+  return issues;
+}
+
+async function refineImagePromptWithAI(params: {
+  promptText: string;
+  style: string;
+  globalSubject?: string;
+  aspectRatio?: string;
+  intent?: PromptRefinementIntent;
+  issues?: PromptLintIssue[];
+}): Promise<string> {
+  const {
+    promptText,
+    style,
+    globalSubject = "",
+    aspectRatio = "16:9",
+    intent = "auto",
+    issues = [],
+  } = params;
+
+  const issueSummary =
+    issues.length > 0
+      ? issues.map((i) => `- (${i.code}) ${i.message}`).join("\n")
+      : "- (none)";
+
+  const response = await ai.models.generateContent({
+    model: MODELS.TEXT,
+    contents: `You are a prompt engineer for high-quality image generation.
+Rewrite the user's prompt to improve visual clarity, cinematic composition, and subject consistency while preserving intent.
+
+Global Subject (must remain consistent across scenes):
+${globalSubject ? globalSubject : "(none)"}
+
+Chosen Style Preset:
+${style}
+
+Aspect Ratio:
+${aspectRatio}
+
+User Intent:
+${intent}
+
+Detected Issues:
+${issueSummary}
+
+Requirements:
+- Output ONLY a JSON object: { "prompt": string }.
+- Keep it a single prompt suitable for an image model.
+- Make it vivid and specific (setting, lighting, camera/composition, color palette, mood).
+- Keep style consistent with the chosen preset.
+- Do NOT include any text/typography/subtitles/logos/watermarks instructions.
+- If Global Subject is provided, restate its key identifiers (face/outfit/materials) so the subject stays consistent.
+- Avoid repeating generic phrases like "highly detailed" or "stunning" too much.
+- Keep length 60–120 words.
+
+User Prompt:
+${promptText}`,
+    config: {
+      responseMimeType: "application/json",
+      responseSchema: {
+        type: Type.OBJECT,
+        properties: {
+          prompt: { type: Type.STRING },
+        },
+        required: ["prompt"],
+      },
+    },
+  });
+
+  const jsonStr = response.text;
+  if (!jsonStr) return promptText;
+
+  try {
+    const parsed = JSON.parse(jsonStr) as { prompt: string };
+    return parsed.prompt?.trim() ? parsed.prompt.trim() : promptText;
+  } catch {
+    return promptText;
+  }
+}
 
 // --- Interfaces ---
 
@@ -78,7 +336,7 @@ interface TranslationItem {
 
 export const transcribeAudioWithWordTiming = async (
   base64Audio: string,
-  mimeType: string
+  mimeType: string,
 ): Promise<SubtitleItem[]> => {
   return withRetry(async () => {
     try {
@@ -89,7 +347,7 @@ export const transcribeAudioWithWordTiming = async (
             { inlineData: { mimeType, data: base64Audio } },
             {
               text: `Transcribe the lyrics of this audio file with precise word-level timing.
-  
+
   Return a JSON object with this structure:
   {
     "lines": [
@@ -99,14 +357,14 @@ export const transcribeAudioWithWordTiming = async (
       }
     ]
   }
-  
+
   Rules:
   1. Times in SECONDS (e.g. 1.5).
   2. Each line is a natural phrase.
   3. word.start/end are exact.
-  4. Be precise.`
-            }
-          ]
+  4. Be precise.`,
+            },
+          ],
         },
         config: {
           responseMimeType: "application/json",
@@ -129,18 +387,18 @@ export const transcribeAudioWithWordTiming = async (
                         properties: {
                           word: { type: Type.STRING },
                           start: { type: Type.NUMBER },
-                          end: { type: Type.NUMBER }
+                          end: { type: Type.NUMBER },
                         },
-                        required: ["word", "start", "end"]
-                      }
-                    }
+                        required: ["word", "start", "end"],
+                      },
+                    },
                   },
-                  required: ["id", "startTime", "endTime", "text", "words"]
-                }
-              }
-            }
-          }
-        }
+                  required: ["id", "startTime", "endTime", "text", "words"],
+                },
+              },
+            },
+          },
+        },
       });
 
       const jsonStr = response.text;
@@ -148,29 +406,35 @@ export const transcribeAudioWithWordTiming = async (
 
       const parsed: TranscriptionResponse = JSON.parse(jsonStr);
 
-      return parsed.lines.map((line): SubtitleItem => ({
-        id: line.id,
-        startTime: line.startTime,
-        endTime: line.endTime,
-        text: line.text,
-        words: line.words.map((w): WordTiming => ({
-          word: w.word,
-          startTime: w.start,
-          endTime: w.end
-        }))
-      }));
-
+      return parsed.lines.map(
+        (line): SubtitleItem => ({
+          id: line.id,
+          startTime: line.startTime,
+          endTime: line.endTime,
+          text: line.text,
+          words: line.words.map(
+            (w): WordTiming => ({
+              word: w.word,
+              startTime: w.start,
+              endTime: w.end,
+            }),
+          ),
+        }),
+      );
     } catch (error) {
       console.error("Word-level transcription error:", error);
       console.warn("Falling back to line-level SRT transcription...");
       const srt = await transcribeAudio(base64Audio, mimeType);
-      const { parseSRT } = await import('../utils/srtParser');
+      const { parseSRT } = await import("../utils/srtParser");
       return parseSRT(srt);
     }
   });
 };
 
-export const transcribeAudio = async (base64Audio: string, mimeType: string): Promise<string> => {
+export const transcribeAudio = async (
+  base64Audio: string,
+  mimeType: string,
+): Promise<string> => {
   return withRetry(async () => {
     const response = await ai.models.generateContent({
       model: MODELS.TRANSCRIPTION,
@@ -181,43 +445,55 @@ export const transcribeAudio = async (base64Audio: string, mimeType: string): Pr
             text: `Transcribe lyrics to SRT format.
             Rules:
             1. Format: ID [newline] HH:MM:SS,mmm --> HH:MM:SS,mmm [newline] Text
-            2. No markdown blocks. Return ONLY raw SRT text.`
-          }
-        ]
-      }
+            2. No markdown blocks. Return ONLY raw SRT text.`,
+          },
+        ],
+      },
     });
 
     const text = response.text;
     if (!text) throw new Error("No transcription generated");
-    return text.replace(/^```srt\s*/i, '').replace(/^```\s*/i, '').replace(/```$/, '');
+    return text
+      .replace(/^```srt\s*/i, "")
+      .replace(/^```\s*/i, "")
+      .replace(/```$/, "");
   });
 };
 
-const getPromptGenerationInstruction = (style: string, mode: 'lyrics' | 'story', content: string) => {
-  const baseInstruction = `Analyze this ${mode === 'lyrics' ? 'SRT lyrics' : 'spoken-word transcript'} to create a visual storyboard. Art Style: "${style}".`;
-  
-  const specificInstruction = mode === 'lyrics'
-    ? `1. Identify song structure.
+const getPromptGenerationInstruction = (
+  style: string,
+  mode: "lyrics" | "story",
+  content: string,
+) => {
+  const baseInstruction = `Analyze this ${mode === "lyrics" ? "SRT lyrics" : "spoken-word transcript"} to create a visual storyboard. Art Style: "${style}".`;
+
+  const specificInstruction =
+    mode === "lyrics"
+      ? `1. Identify song structure.
        2. Visual Consistency: maintain specific style without text/logos.
        3. Generate 8-12 detailed prompts (60-100 words each).
        4. Align timestamp with section start.`
-    : `1. Identify narrative segments (Intro, Scene changes, Key concepts).
+      : `1. Identify narrative segments (Intro, Scene changes, Key concepts).
        2. Visual Consistency: maintain specific style. No text/logos.
        3. Generate 8-12 detailed prompts (60-100 words each).
        4. Align timestamp with the start of the concept/scene.`;
 
   return `${baseInstruction}
-  
+
   Instructions:
   ${specificInstruction}
 
   Content:
-  ${content.slice(0, 15000)} 
+  ${content.slice(0, 15000)}
 
   Return JSON object with 'prompts' array. Each item: { text, mood, timestamp }`;
 };
 
-const generatePrompts = async (srtContent: string, style: string, mode: 'lyrics' | 'story'): Promise<ImagePrompt[]> => {
+const generatePrompts = async (
+  srtContent: string,
+  style: string,
+  mode: "lyrics" | "story",
+): Promise<ImagePrompt[]> => {
   return withRetry(async () => {
     try {
       const response = await ai.models.generateContent({
@@ -237,12 +513,12 @@ const generatePrompts = async (srtContent: string, style: string, mode: 'lyrics'
                     mood: { type: Type.STRING },
                     timestamp: { type: Type.STRING },
                   },
-                  required: ["text", "mood", "timestamp"]
-                }
-              }
-            }
-          }
-        }
+                  required: ["text", "mood", "timestamp"],
+                },
+              },
+            },
+          },
+        },
       });
 
       const jsonStr = response.text;
@@ -255,9 +531,8 @@ const generatePrompts = async (srtContent: string, style: string, mode: 'lyrics'
         mood: p.mood,
         timestamp: p.timestamp,
         id: `prompt-${Date.now()}-${index}`,
-        timestampSeconds: parseSRTTimestamp(p.timestamp) ?? 0
+        timestampSeconds: parseSRTTimestamp(p.timestamp) ?? 0,
       }));
-
     } catch (error) {
       console.error("Prompt generation error:", error);
       return [];
@@ -265,43 +540,151 @@ const generatePrompts = async (srtContent: string, style: string, mode: 'lyrics'
   });
 };
 
-export const generatePromptsFromLyrics = (srtContent: string, style: string = "Cinematic") => 
-  generatePrompts(srtContent, style, 'lyrics');
+export const generatePromptsFromLyrics = (
+  srtContent: string,
+  style: string = "Cinematic",
+) => generatePrompts(srtContent, style, "lyrics");
 
-export const generatePromptsFromStory = (srtContent: string, style: string = "Cinematic") => 
-  generatePrompts(srtContent, style, 'story');
+export const generatePromptsFromStory = (
+  srtContent: string,
+  style: string = "Cinematic",
+) => generatePrompts(srtContent, style, "story");
 
-export const generateImageFromPrompt = async (promptText: string, style: string = "Cinematic", globalSubject: string = "", aspectRatio: string = "16:9"): Promise<string> => {
+export const refineImagePrompt = async (params: {
+  promptText: string;
+  style?: string;
+  globalSubject?: string;
+  aspectRatio?: string;
+  intent?: PromptRefinementIntent;
+  previousPrompts?: string[];
+}): Promise<{ refinedPrompt: string; issues: PromptLintIssue[] }> => {
+  const {
+    promptText,
+    style = "Cinematic",
+    globalSubject = "",
+    aspectRatio = "16:9",
+    intent = "auto",
+    previousPrompts = [],
+  } = params;
+
+  const issues = lintPrompt({ promptText, globalSubject, previousPrompts });
+
+  // Only run an AI rewrite if it looks low quality or the user explicitly requests a change.
+  const shouldRefine =
+    intent !== "auto" ||
+    issues.some(
+      (i) =>
+        i.code === "too_short" ||
+        i.code === "repetitive" ||
+        i.code === "missing_subject",
+    );
+
+  if (!shouldRefine) {
+    return { refinedPrompt: promptText.trim(), issues };
+  }
+
+  const refinedPrompt = await withRetry(async () => {
+    return refineImagePromptWithAI({
+      promptText,
+      style,
+      globalSubject,
+      aspectRatio,
+      intent,
+      issues,
+    });
+  });
+
+  return { refinedPrompt, issues };
+};
+
+export const generateImageFromPrompt = async (
+  promptText: string,
+  style: string = "Cinematic",
+  globalSubject: string = "",
+  aspectRatio: string = "16:9",
+  /** Skip AI refinement if the prompt was already refined upstream (e.g., bulk generation) */
+  skipRefine: boolean = false,
+): Promise<string> => {
   return withRetry(async () => {
     const styleModifiers: Record<string, string> = {
-      "Cinematic": "Cinematic movie still, 35mm film grain, anamorphic lens flare, hyper-realistic, dramatic lighting, 8k resolution",
-      "Anime / Manga": "High-quality Anime style, Studio Ghibli aesthetic, vibrant colors, detailed backgrounds, cel shaded, expressive",
-      "Cyberpunk": "Futuristic cyberpunk city style, neon lights, rain-slicked streets, high contrast, blade runner vibe, technological",
-      "Watercolor": "Soft watercolor painting, artistic brush strokes, paper texture, bleeding colors, dreamy atmosphere",
-      "Oil Painting": "Classic oil painting, thick impasto, visible brushwork, texture, rich colors, classical composition",
-      "Pixel Art": "High quality pixel art, 16-bit retro game style, dithering, vibrant colors",
-      "Surrealist": "Surrealist art style, dreamlike, Dali-esque, impossible geometry, symbolic, mysterious",
-      "Dark Fantasy": "Dark fantasy art, grimdark, gothic atmosphere, misty, detailed textures, eldritch",
-      "Commercial / Ad": "Professional product photography, studio lighting, clean background, macro details, commercial aesthetic, 4k, sharp focus, advertising standard",
-      "Minimalist / Tutorial": "Clean vector illustration, flat design, isometric perspective, white background, educational style, clear visibility, infographic aesthetic",
-      "Comic Book": "American comic book style, dynamic action lines, bold ink outlines, halftone patterns, vibrant superhero colors, expressive",
-      "Corporate / Brand": "Modern corporate memphis style, flat vector, clean lines, professional, trustworthy, blue and white color palette, tech startup aesthetic",
-      "Photorealistic": "Raw photo, hyper-realistic, DSLR, 50mm lens, depth of field, natural lighting, unedited footage style"
+      Cinematic:
+        "Cinematic movie still, 35mm film grain, anamorphic lens flare, hyper-realistic, dramatic lighting, 8k resolution",
+      "Anime / Manga":
+        "High-quality Anime style, Studio Ghibli aesthetic, vibrant colors, detailed backgrounds, cel shaded, expressive",
+      Cyberpunk:
+        "Futuristic cyberpunk city style, neon lights, rain-slicked streets, high contrast, blade runner vibe, technological",
+      Watercolor:
+        "Soft watercolor painting, artistic brush strokes, paper texture, bleeding colors, dreamy atmosphere",
+      "Oil Painting":
+        "Classic oil painting, thick impasto, visible brushwork, texture, rich colors, classical composition",
+      "Pixel Art":
+        "High quality pixel art, 16-bit retro game style, dithering, vibrant colors",
+      Surrealist:
+        "Surrealist art style, dreamlike, Dali-esque, impossible geometry, symbolic, mysterious",
+      "Dark Fantasy":
+        "Dark fantasy art, grimdark, gothic atmosphere, misty, detailed textures, eldritch",
+      "Commercial / Ad":
+        "Professional product photography, studio lighting, clean background, macro details, commercial aesthetic, 4k, sharp focus, advertising standard",
+      "Minimalist / Tutorial":
+        "Clean vector illustration, flat design, isometric perspective, white background, educational style, clear visibility, infographic aesthetic",
+      "Comic Book":
+        "American comic book style, dynamic action lines, bold ink outlines, halftone patterns, vibrant superhero colors, expressive",
+      "Corporate / Brand":
+        "Modern corporate memphis style, flat vector, clean lines, professional, trustworthy, blue and white color palette, tech startup aesthetic",
+      Photorealistic:
+        "Raw photo, hyper-realistic, DSLR, 50mm lens, depth of field, natural lighting, unedited footage style",
     };
 
     const modifier = styleModifiers[style] || styleModifiers["Cinematic"];
-    const subjectContext = globalSubject ? `Main Subject: ${globalSubject}. ` : "";
-    
+
+    // Run a lightweight lint + (optional) AI refinement before image generation.
+    // Skip if already refined upstream (e.g., during bulk generation with cross-scene context).
+    let refinedPrompt = promptText;
+
+    if (!skipRefine) {
+      const result = await refineImagePrompt({
+        promptText,
+        style,
+        globalSubject,
+        aspectRatio,
+        intent: "auto",
+        previousPrompts: [],
+      });
+
+      refinedPrompt = result.refinedPrompt;
+
+      if (result.issues.length > 0) {
+        console.log(
+          `[prompt-lint] ${result.issues.map((i) => i.code).join(", ")} | style=${style} | aspectRatio=${aspectRatio}`,
+        );
+      }
+    }
+
+    const subjectBlock = globalSubject
+      ? `Global Subject (keep consistent across scenes): ${globalSubject}`
+      : "Global Subject: (none)";
+
+    const negative = DEFAULT_NEGATIVE_CONSTRAINTS.map((s) => `- ${s}`).join(
+      "\n",
+    );
+
     const finalPrompt = `
-      Create an image with this style: ${modifier}.
-      
-      Scene Content: ${subjectContext}${promptText}
-      
-      Requirements:
-      - High quality, professional composition.
-      - Adhere strictly to the requested art style.
-      - NO text, NO watermarks, NO logos, NO split screens.
-      - NO distorted anatomy or blurry faces.
+STYLE:
+${modifier}
+
+${subjectBlock}
+
+SCENE PROMPT:
+${refinedPrompt}
+
+HARD REQUIREMENTS:
+- Professional composition and clean framing.
+- Maintain the same main subject identity across scenes (face, outfit, materials).
+- No text, subtitles, typography, logos, watermarks, brand names.
+- Avoid distorted anatomy, extra limbs, deformed hands, blurry faces.
+
+NEGATIVE CONSTRAINTS:
+${negative}
     `.trim();
 
     const response = await ai.models.generateContent({
@@ -309,8 +692,8 @@ export const generateImageFromPrompt = async (promptText: string, style: string 
       contents: { parts: [{ text: finalPrompt }] },
       config: {
         // @ts-ignore
-        imageConfig: { aspectRatio: aspectRatio }
-      }
+        imageConfig: { aspectRatio: aspectRatio },
+      },
     });
 
     for (const part of response.candidates?.[0]?.content?.parts || []) {
@@ -323,19 +706,205 @@ export const generateImageFromPrompt = async (promptText: string, style: string 
   });
 };
 
+/**
+ * Poll a Veo video generation operation until complete.
+ */
+async function pollVideoOperation(
+  operation: any,
+  maxAttempts: number = 60,
+  delayMs: number = 5000,
+): Promise<any> {
+  let currentOp = operation;
+
+  for (let i = 0; i < maxAttempts; i++) {
+    // Check if operation is already done
+    if (currentOp.done) {
+      if (currentOp.error) {
+        throw new Error(
+          `Video generation failed: ${currentOp.error.message || JSON.stringify(currentOp.error)}`,
+        );
+      }
+      return currentOp;
+    }
+
+    console.log(
+      `Video generation in progress... (attempt ${i + 1}/${maxAttempts})`,
+    );
+    await new Promise((resolve) => setTimeout(resolve, delayMs));
+
+    // Refresh the operation status
+    // @ts-ignore - SDK types may not be complete
+    currentOp = await ai.operations.get(currentOp);
+  }
+
+  throw new Error(
+    "Video generation timed out after " +
+      (maxAttempts * delayMs) / 1000 +
+      " seconds",
+  );
+}
+
+export const generateVideoFromPrompt = async (
+  promptText: string,
+  style: string = "Cinematic",
+  globalSubject: string = "",
+  aspectRatio: string = "16:9",
+): Promise<string> => {
+  // Check API key first
+  if (!API_KEY) {
+    throw new Error(
+      "Missing GEMINI_API_KEY. Video generation requires a valid Gemini API key. " +
+        "Set VITE_GEMINI_API_KEY in your .env.local file.",
+    );
+  }
+
+  return withRetry(async () => {
+    const styleModifiers: Record<string, string> = {
+      Cinematic:
+        "Cinematic movie shot, slow camera movement, 35mm film grain, hyper-realistic, dramatic lighting, 8k resolution",
+      "Anime / Manga":
+        "High-quality Anime animation, Studio Ghibli style, moving clouds, wind effects, vibrant colors",
+      Cyberpunk:
+        "Futuristic cyberpunk city, neon lights flickering, rain falling, flying cars, high contrast",
+      Watercolor:
+        "Animated watercolor painting, flowing paint, artistic brush strokes, paper texture, bleeding colors",
+      "Oil Painting":
+        "Living oil painting, shifting textures, visible brushwork, classical composition",
+      "Pixel Art":
+        "Animated pixel art, 16-bit retro game loop, dithering, vibrant colors",
+      Surrealist:
+        "Surrealist dreamscape, morphing shapes, impossible geometry, mysterious atmosphere",
+      "Dark Fantasy":
+        "Dark fantasy atmosphere, rolling fog, flickering torches, grimdark, detailed textures",
+      "Commercial / Ad":
+        "Professional product b-roll, smooth slider shot, studio lighting, clean background, 4k",
+      "Minimalist / Tutorial":
+        "Clean motion graphics, animated vector illustration, flat design, smooth transitions",
+      "Comic Book":
+        "Motion comic style, dynamic action, bold ink outlines, halftone patterns",
+      "Corporate / Brand":
+        "Modern corporate motion graphics, kinetic typography background, clean lines, professional",
+      Photorealistic:
+        "Raw video footage, handheld camera, natural lighting, unedited style",
+    };
+
+    const modifier = styleModifiers[style] || styleModifiers["Cinematic"];
+
+    const subjectBlock = globalSubject
+      ? `Global Subject (keep consistent): ${globalSubject}`
+      : "";
+
+    const finalPrompt = `
+${modifier}. ${promptText}${subjectBlock ? `. ${subjectBlock}` : ""}
+Smooth camera motion. No text or watermarks.
+    `.trim();
+
+    // Use the generateVideos API which returns an async operation
+    // Note: Veo video generation requires a paid Gemini API plan
+    let operation;
+    try {
+      // @ts-ignore - generateVideos may not be in type definitions yet
+      operation = await ai.models.generateVideos({
+        model: MODELS.VIDEO,
+        prompt: finalPrompt,
+        config: {
+          aspectRatio: aspectRatio,
+          numberOfVideos: 1,
+          durationSeconds: 5,
+          // personGeneration is required for some models
+          personGeneration: "allow_adult",
+        },
+      });
+    } catch (err: any) {
+      // Provide helpful error messages for common issues
+      if (err.status === 404 || err.message?.includes("NOT_FOUND")) {
+        throw new Error(
+          `Veo video generation model not available. This may require:\n` +
+            `1. A paid Gemini API plan (Veo is not available on free tier)\n` +
+            `2. Enabling the Generative AI API in Google Cloud Console\n` +
+            `3. Accepting Veo terms of service in AI Studio\n\n` +
+            `Alternative: Use "deapi" as your video provider, or switch to image-only mode.`,
+        );
+      }
+      if (err.status === 403 || err.message?.includes("PERMISSION_DENIED")) {
+        throw new Error(
+          `Permission denied for Veo video generation. ` +
+            `Please ensure your API key has access to video generation features.`,
+        );
+      }
+      throw err;
+    }
+
+    // Poll until the operation is complete
+    const completedOp = await pollVideoOperation(operation);
+
+    // Get the generated video
+    const generatedVideos = completedOp.response?.generatedVideos || [];
+    if (generatedVideos.length === 0) {
+      throw new Error("No video generated in response");
+    }
+
+    const videoFile = generatedVideos[0].video;
+    if (!videoFile) {
+      throw new Error("No video file in response");
+    }
+
+    // Download the video file
+    // @ts-ignore - files.download may not be in type definitions yet
+    const downloadResponse: any = await ai.files.download({ file: videoFile });
+
+    // Convert to base64 data URL
+    // Handle Blob response
+    if (
+      downloadResponse &&
+      typeof downloadResponse === "object" &&
+      typeof downloadResponse.arrayBuffer === "function"
+    ) {
+      const blob = downloadResponse as Blob;
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onloadend = () => resolve(reader.result as string);
+        reader.onerror = reject;
+        reader.readAsDataURL(blob);
+      });
+    }
+
+    // If it's already a string (base64 or data URL)
+    if (typeof downloadResponse === "string") {
+      return downloadResponse.startsWith("data:")
+        ? downloadResponse
+        : `data:video/mp4;base64,${downloadResponse}`;
+    }
+
+    // Handle ArrayBuffer
+    if (downloadResponse instanceof ArrayBuffer) {
+      const uint8Array = new Uint8Array(downloadResponse);
+      let binary = "";
+      for (let i = 0; i < uint8Array.length; i++) {
+        binary += String.fromCharCode(uint8Array[i]);
+      }
+      return `data:video/mp4;base64,${btoa(binary)}`;
+    }
+
+    throw new Error("Unexpected video download response format");
+  });
+};
+
 export const translateSubtitles = async (
   subtitles: SubtitleItem[],
-  targetLanguage: string
-): Promise<{ id: number, translation: string }[]> => {
+  targetLanguage: string,
+): Promise<{ id: number; translation: string }[]> => {
   const BATCH_SIZE = 50;
-  const simplifiedSubs = subtitles.map(s => ({ id: s.id, text: s.text }));
+  const simplifiedSubs = subtitles.map((s) => ({ id: s.id, text: s.text }));
   const chunks = [];
 
   for (let i = 0; i < simplifiedSubs.length; i += BATCH_SIZE) {
     chunks.push(simplifiedSubs.slice(i, i + BATCH_SIZE));
   }
 
-  console.log(`Translating ${subtitles.length} lines in ${chunks.length} batches...`);
+  console.log(
+    `Translating ${subtitles.length} lines in ${chunks.length} batches...`,
+  );
 
   const processBatch = async (batch: typeof simplifiedSubs) => {
     return withRetry(async () => {
@@ -344,7 +913,7 @@ export const translateSubtitles = async (
         contents: `Translate these lyrics into ${targetLanguage}.
         Return JSON object with "translations" array [{ id, translation }].
         Keep poetic flow.
-        
+
         Input:
         ${JSON.stringify(batch)}`,
         config: {
@@ -358,14 +927,14 @@ export const translateSubtitles = async (
                   type: Type.OBJECT,
                   properties: {
                     id: { type: Type.INTEGER },
-                    translation: { type: Type.STRING }
+                    translation: { type: Type.STRING },
                   },
-                  required: ["id", "translation"]
-                }
-              }
-            }
-          }
-        }
+                  required: ["id", "translation"],
+                },
+              },
+            },
+          },
+        },
       });
 
       const jsonStr = response.text;
@@ -377,7 +946,9 @@ export const translateSubtitles = async (
   };
 
   try {
-    const results = await Promise.all(chunks.map(chunk => processBatch(chunk)));
+    const results = await Promise.all(
+      chunks.map((chunk) => processBatch(chunk)),
+    );
     return results.flat().sort((a, b) => a.id - b.id);
   } catch (error) {
     console.error("Translation error:", error);

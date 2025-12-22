@@ -1,13 +1,13 @@
-import { SongData } from '../types';
-import { extractFrequencyData } from '../utils/audioAnalysis';
-import { FFmpeg } from '@ffmpeg/ffmpeg';
-import { fetchFile, toBlobURL } from '@ffmpeg/util';
-import { applyPolyfills } from '../lib/utils';
+import { SongData } from "../types";
+import { extractFrequencyData } from "../utils/audioAnalysis";
+import { FFmpeg } from "@ffmpeg/ffmpeg";
+import { fetchFile, toBlobURL } from "@ffmpeg/util";
+import { applyPolyfills, isRTL } from "../lib/utils";
 
-const SERVER_URL = 'http://localhost:3001';
+const SERVER_URL = "http://localhost:3001";
 
 export type ExportProgress = {
-  stage: 'loading' | 'preparing' | 'rendering' | 'encoding' | 'complete';
+  stage: "loading" | "preparing" | "rendering" | "encoding" | "complete";
   progress: number;
   message: string;
 };
@@ -15,48 +15,60 @@ export type ExportProgress = {
 export type ProgressCallback = (progress: ExportProgress) => void;
 
 export interface ExportConfig {
-  orientation: 'landscape' | 'portrait';
+  orientation: "landscape" | "portrait";
   useModernEffects: boolean;
-  syncOffsetMs: number;          // Advance lyrics by N ms (negative = earlier, default: -50)
-  fadeOutBeforeCut: boolean;     // Fade lyrics 0.3s before image transition
-  wordLevelHighlight: boolean;   // Enable per-word karaoke vs. per-line
+  syncOffsetMs: number; // Advance lyrics by N ms (negative = earlier, default: -50)
+  fadeOutBeforeCut: boolean; // Fade lyrics 0.3s before image transition
+  wordLevelHighlight: boolean; // Enable per-word karaoke vs. per-line
+  contentMode: "music" | "story"; // "story" disables audio visualizer
 }
 
-const renderFrameToCanvas = (
+type RenderAsset = {
+  time: number;
+  type: "image" | "video";
+  element: HTMLImageElement | HTMLVideoElement;
+};
+
+const renderFrameToCanvas = async (
   ctx: CanvasRenderingContext2D,
   width: number,
   height: number,
   currentTime: number,
-  imageAssets: { time: number; img: HTMLImageElement }[],
-  subtitles: SongData['parsedSubtitles'],
+  assets: RenderAsset[],
+  subtitles: SongData["parsedSubtitles"],
   frequencyData: Uint8Array | null,
   previousFrequencyData: Uint8Array | null, // Added for smoothing
-  config: ExportConfig
-): void => {
+  config: ExportConfig,
+): Promise<void> => {
   // 1. Background (Black)
-  ctx.fillStyle = '#000';
+  ctx.fillStyle = "#000";
   ctx.fillRect(0, 0, width, height);
 
-  // 2. Image Layer with Ken Burns & Transitions
+  // 2. Visual Layer with Ken Burns & Transitions
   let currentIndex = 0;
-  for (let i = 0; i < imageAssets.length; i++) {
-    if (currentTime >= imageAssets[i].time) {
+  for (let i = 0; i < assets.length; i++) {
+    if (currentTime >= assets[i].time) {
       currentIndex = i;
     } else {
       break;
     }
   }
 
-  const currentAsset = imageAssets[currentIndex];
-  const nextAsset = imageAssets[currentIndex + 1];
+  const currentAsset = assets[currentIndex];
+  const nextAsset = assets[currentIndex + 1];
 
   // Calculate duration of current slide
   const slideStartTime = currentAsset.time;
-  const slideEndTime = nextAsset ? nextAsset.time : (slideStartTime + 30); // Default 30s if last
+  const slideEndTime = nextAsset ? nextAsset.time : slideStartTime + 30; // Default 30s if last
   const slideDuration = slideEndTime - slideStartTime;
   const slideProgress = (currentTime - slideStartTime) / slideDuration;
 
-  const drawImage = (img: HTMLImageElement, progress: number, opacity: number) => {
+  const drawAsset = async (
+    asset: RenderAsset,
+    progress: number,
+    opacity: number,
+    offsetTime: number = 0,
+  ) => {
     ctx.save();
     ctx.globalAlpha = opacity;
 
@@ -65,68 +77,99 @@ const renderFrameToCanvas = (
     let y: number;
     let drawWidth: number;
     let drawHeight: number;
+    const element = asset.element;
+
+    // Get natural dimensions
+    const naturalWidth =
+      asset.type === "video"
+        ? (element as HTMLVideoElement).videoWidth
+        : (element as HTMLImageElement).width;
+    const naturalHeight =
+      asset.type === "video"
+        ? (element as HTMLVideoElement).videoHeight
+        : (element as HTMLImageElement).height;
+
+    // Handle Video Seek
+    if (asset.type === "video") {
+      const vid = element as HTMLVideoElement;
+      if (vid.duration) {
+        // Loop logic: absolute time relative to slide start
+        // offsetTime allows "peeking" into next slide for crossfade
+        const relativeTime = currentTime + offsetTime - asset.time;
+        // Ensure positive modulo for loop
+        vid.currentTime = relativeTime % vid.duration;
+
+        // In a perfect world, we await 'seeked'.
+        // For now, we set it and hope browser buffers are fast enough for the frame capture.
+        // A small improvement: check readyState
+        // if (vid.readyState < 2) await new Promise(r => vid.oncanplay = r);
+      }
+    }
 
     if (config.useModernEffects) {
       // Ken Burns: Zoom from 1.0 to 1.15 over the slide
-      const zoom = 1.0 + (progress * 0.15);
-      scale = Math.max(width / img.width, height / img.height) * zoom;
+      // For video, we might want less zoom to avoid shakiness, or keep it for effect.
+      const zoom = 1.0 + progress * 0.15;
+      scale = Math.max(width / naturalWidth, height / naturalHeight) * zoom;
     } else {
       // Static fill
-      scale = Math.max(width / img.width, height / img.height);
+      scale = Math.max(width / naturalWidth, height / naturalHeight);
     }
 
-    drawWidth = img.width * scale;
-    drawHeight = img.height * scale;
+    drawWidth = naturalWidth * scale;
+    drawHeight = naturalHeight * scale;
     x = (width - drawWidth) / 2;
     y = (height - drawHeight) / 2;
 
-    ctx.drawImage(img, x, y, drawWidth, drawHeight);
+    ctx.drawImage(element, x, y, drawWidth, drawHeight);
     ctx.restore();
   };
 
-  if (currentAsset?.img) {
+  if (currentAsset?.element) {
     if (config.useModernEffects) {
       // Cross-fade logic
       const TRANSITION_DURATION = 1.5; // seconds
-      const timeUntilNext = nextAsset ? (nextAsset.time - currentTime) : Infinity;
+      const timeUntilNext = nextAsset ? nextAsset.time - currentTime : Infinity;
 
       if (timeUntilNext < TRANSITION_DURATION && nextAsset) {
         // Transitioning OUT
-        const transitionProgress = 1 - (timeUntilNext / TRANSITION_DURATION);
+        const transitionProgress = 1 - timeUntilNext / TRANSITION_DURATION;
 
         // Draw current (fading out)
-        drawImage(currentAsset.img, slideProgress, 1);
+        await drawAsset(currentAsset, slideProgress, 1);
 
         // Draw next (fading in)
-        // Next slide starts at 0 progress
-        drawImage(nextAsset.img, 0, transitionProgress);
+        // Next slide starts at 0 progress relative to itself
+        // But since we are PRE-displaying it, we need to handle its video timing correctly
+        // (offset by timeUntilNext)
+        await drawAsset(nextAsset, 0, transitionProgress, -timeUntilNext);
       } else {
         // Normal draw
-        drawImage(currentAsset.img, slideProgress, 1);
+        await drawAsset(currentAsset, slideProgress, 1);
       }
     } else {
       // Simple cut
-      drawImage(currentAsset.img, 0, 1);
+      await drawAsset(currentAsset, 0, 1);
     }
   }
 
-  // 3. Visualizer Layer
-  if (frequencyData) {
+  // 3. Visualizer Layer (only for music mode)
+  if (frequencyData && config.contentMode === "music") {
     const bufferLength = frequencyData.length;
     const barWidth = (width / bufferLength) * 2.5;
     let x = 0;
 
     // Create gradient
     const gradient = ctx.createLinearGradient(0, height, 0, height / 2);
-    gradient.addColorStop(0, 'rgba(34, 211, 238, 0.2)'); // Cyan transparent bottom
-    gradient.addColorStop(0.5, 'rgba(34, 211, 238, 0.6)'); // Cyan mid
-    gradient.addColorStop(1, 'rgba(167, 139, 250, 0.8)'); // Purple top
+    gradient.addColorStop(0, "rgba(34, 211, 238, 0.2)"); // Cyan transparent bottom
+    gradient.addColorStop(0.5, "rgba(34, 211, 238, 0.6)"); // Cyan mid
+    gradient.addColorStop(1, "rgba(167, 139, 250, 0.8)"); // Purple top
 
     ctx.save();
     if (config.useModernEffects) {
       // Add a glow effect
       ctx.shadowBlur = 15;
-      ctx.shadowColor = 'rgba(34, 211, 238, 0.5)';
+      ctx.shadowColor = "rgba(34, 211, 238, 0.5)";
     }
 
     ctx.fillStyle = gradient;
@@ -151,7 +194,13 @@ const renderFrameToCanvas = (
       if (barHeight > 0) {
         ctx.beginPath();
         if (config.useModernEffects) {
-          ctx.roundRect(centerX + offset, height - barHeight, barWidth, barHeight + 10, [radius, radius, 0, 0]);
+          ctx.roundRect(
+            centerX + offset,
+            height - barHeight,
+            barWidth,
+            barHeight + 10,
+            [radius, radius, 0, 0],
+          );
         } else {
           ctx.rect(centerX + offset, height - barHeight, barWidth, barHeight);
         }
@@ -160,9 +209,20 @@ const renderFrameToCanvas = (
         // Left side
         ctx.beginPath();
         if (config.useModernEffects) {
-          ctx.roundRect(centerX - offset - barWidth, height - barHeight, barWidth, barHeight + 10, [radius, radius, 0, 0]);
+          ctx.roundRect(
+            centerX - offset - barWidth,
+            height - barHeight,
+            barWidth,
+            barHeight + 10,
+            [radius, radius, 0, 0],
+          );
         } else {
-          ctx.rect(centerX - offset - barWidth, height - barHeight, barWidth, barHeight);
+          ctx.rect(
+            centerX - offset - barWidth,
+            height - barHeight,
+            barWidth,
+            barHeight,
+          );
         }
         ctx.fill();
       }
@@ -176,28 +236,27 @@ const renderFrameToCanvas = (
   // 4. Gradient Overlay
   if (config.useModernEffects) {
     const overlayGradient = ctx.createLinearGradient(0, height, 0, 0);
-    overlayGradient.addColorStop(0, 'rgba(2, 6, 23, 0.95)'); // Darker bottom
-    overlayGradient.addColorStop(0.3, 'rgba(2, 6, 23, 0.6)');
-    overlayGradient.addColorStop(0.7, 'rgba(2, 6, 23, 0.2)');
-    overlayGradient.addColorStop(1, 'rgba(2, 6, 23, 0.4)'); // Slight top darken
+    overlayGradient.addColorStop(0, "rgba(2, 6, 23, 0.95)"); // Darker bottom
+    overlayGradient.addColorStop(0.3, "rgba(2, 6, 23, 0.6)");
+    overlayGradient.addColorStop(0.7, "rgba(2, 6, 23, 0.2)");
+    overlayGradient.addColorStop(1, "rgba(2, 6, 23, 0.4)"); // Slight top darken
     ctx.fillStyle = overlayGradient;
     ctx.fillRect(0, 0, width, height);
   } else {
     // Simpler overlay for readability
     const overlayGradient = ctx.createLinearGradient(0, height, 0, height / 2);
-    overlayGradient.addColorStop(0, 'rgba(15, 23, 42, 0.9)');
-    overlayGradient.addColorStop(1, 'rgba(15, 23, 42, 0.0)');
+    overlayGradient.addColorStop(0, "rgba(15, 23, 42, 0.9)");
+    overlayGradient.addColorStop(1, "rgba(15, 23, 42, 0.0)");
     ctx.fillStyle = overlayGradient;
     ctx.fillRect(0, 0, width, height);
   }
 
-
   // 5. Subtitles with Word-Level Highlighting
   // Apply sync offset (negative = lyrics appear earlier)
-  const adjustedTime = currentTime + (config.syncOffsetMs / 1000);
+  const adjustedTime = currentTime + config.syncOffsetMs / 1000;
 
   const activeSub = subtitles.find(
-    s => adjustedTime >= s.startTime && adjustedTime <= s.endTime
+    (s) => adjustedTime >= s.startTime && adjustedTime <= s.endTime,
   );
 
   // Calculate fade-out opacity if near image transition
@@ -215,39 +274,57 @@ const renderFrameToCanvas = (
     ctx.globalAlpha = subtitleOpacity;
 
     const totalDuration = activeSub.endTime - activeSub.startTime;
-    const lineProgress = Math.max(0, Math.min(1, (adjustedTime - activeSub.startTime) / totalDuration));
+    const lineProgress = Math.max(
+      0,
+      Math.min(1, (adjustedTime - activeSub.startTime) / totalDuration),
+    );
 
     // Adjust font size based on orientation
-    const fontSize = config.orientation === 'portrait' ? 48 : 64;
-    const fontWeight = config.useModernEffects ? '800' : 'bold';
+    const fontSize = config.orientation === "portrait" ? 48 : 64;
+    const fontWeight = config.useModernEffects ? "800" : "bold";
     ctx.font = `${fontWeight} ${fontSize}px Inter, system-ui, sans-serif`;
-    ctx.textAlign = 'left'; // Changed to left for word-level positioning
-    ctx.textBaseline = 'middle';
+    ctx.textAlign = "left"; // Changed to left for word-level positioning
+    ctx.textBaseline = "middle";
+
+    // === RTL Detection ===
+    const isTextRTL = isRTL(activeSub.text);
 
     // === Word-Level Rendering ===
-    const hasWordTiming = config.wordLevelHighlight && activeSub.words && activeSub.words.length > 0;
+    const hasWordTiming =
+      config.wordLevelHighlight &&
+      activeSub.words &&
+      activeSub.words.length > 0;
 
     // Get display text (split by spaces if no word timing)
-    const displayWords = hasWordTiming
-      ? activeSub.words!.map(w => w.word)
-      : activeSub.text.split(' ');
+    let displayWords = hasWordTiming
+      ? activeSub.words!.map((w) => w.word)
+      : activeSub.text.split(" ");
+
+    // For RTL languages, reverse the display order for proper rendering
+    // (Canvas renders LTR by default, so we need to reverse for RTL)
+    if (isTextRTL) {
+      displayWords = [...displayWords].reverse();
+    }
 
     // Measure total line width
-    const fullText = displayWords.join(' ');
+    const fullText = displayWords.join(" ");
     const totalWidth = ctx.measureText(fullText).width;
     const startX = (width - totalWidth) / 2;
 
     // Text wrapping for long lines
-    const maxWidth = width - (config.orientation === 'portrait' ? 80 : 200);
+    const maxWidth = width - (config.orientation === "portrait" ? 80 : 200);
     const wrappedLines: { words: string[]; wordIndices: number[] }[] = [];
     let currentLine: string[] = [];
     let currentLineIndices: number[] = [];
     let currentLineWidth = 0;
 
     displayWords.forEach((word, idx) => {
-      const wordWidth = ctx.measureText(word + ' ').width;
+      const wordWidth = ctx.measureText(word + " ").width;
       if (currentLineWidth + wordWidth > maxWidth && currentLine.length > 0) {
-        wrappedLines.push({ words: currentLine, wordIndices: currentLineIndices });
+        wrappedLines.push({
+          words: currentLine,
+          wordIndices: currentLineIndices,
+        });
         currentLine = [word];
         currentLineIndices = [idx];
         currentLineWidth = wordWidth;
@@ -258,23 +335,38 @@ const renderFrameToCanvas = (
       }
     });
     if (currentLine.length > 0) {
-      wrappedLines.push({ words: currentLine, wordIndices: currentLineIndices });
+      wrappedLines.push({
+        words: currentLine,
+        wordIndices: currentLineIndices,
+      });
     }
 
     const lineHeight = fontSize * 1.3;
     const totalTextHeight = wrappedLines.length * lineHeight;
-    const baseY = (height / 2) - (totalTextHeight / 2) - (config.orientation === 'portrait' ? 100 : 0);
+    const baseY =
+      height / 2 -
+      totalTextHeight / 2 -
+      (config.orientation === "portrait" ? 100 : 0);
 
     wrappedLines.forEach((lineData, lineIdx) => {
-      const yPos = baseY + (lineIdx * lineHeight);
-      const lineText = lineData.words.join(' ');
+      const yPos = baseY + lineIdx * lineHeight;
+
+      // For RTL, reverse words back for display but keep indices for progress calculation
+      const displayLineWords = isTextRTL
+        ? [...lineData.words].reverse()
+        : lineData.words;
+      const displayLineIndices = isTextRTL
+        ? [...lineData.wordIndices].reverse()
+        : lineData.wordIndices;
+
+      const lineText = displayLineWords.join(" ");
       const lineWidth = ctx.measureText(lineText).width;
       let xPos = (width - lineWidth) / 2;
 
-      lineData.words.forEach((word, wordIdx) => {
-        const globalWordIdx = lineData.wordIndices[wordIdx];
+      displayLineWords.forEach((word, wordIdx) => {
+        const globalWordIdx = displayLineIndices[wordIdx];
         const wordWidth = ctx.measureText(word).width;
-        const spaceWidth = ctx.measureText(' ').width;
+        const spaceWidth = ctx.measureText(" ").width;
 
         // Calculate word progress
         let wordProgress = 0;
@@ -295,15 +387,30 @@ const renderFrameToCanvas = (
           }
         } else {
           // Fallback: calculate progress based on character position
-          const charsBefore = displayWords.slice(0, globalWordIdx).join(' ').length;
-          const totalChars = fullText.length;
+          // For RTL, we need to calculate from the end of the text
+          const originalWords = hasWordTiming
+            ? activeSub.words!.map((w) => w.word)
+            : activeSub.text.split(" ");
+          const originalFullText = originalWords.join(" ");
+
+          // Map back to original index for RTL
+          const originalIdx = isTextRTL
+            ? originalWords.length - 1 - globalWordIdx
+            : globalWordIdx;
+
+          const charsBefore = originalWords
+            .slice(0, originalIdx)
+            .join(" ").length;
+          const totalChars = originalFullText.length;
           const wordStartProgress = charsBefore / totalChars;
           const wordEndProgress = (charsBefore + word.length) / totalChars;
 
           if (lineProgress >= wordEndProgress) {
             wordProgress = 1;
           } else if (lineProgress >= wordStartProgress) {
-            wordProgress = (lineProgress - wordStartProgress) / (wordEndProgress - wordStartProgress);
+            wordProgress =
+              (lineProgress - wordStartProgress) /
+              (wordEndProgress - wordStartProgress);
             isActiveWord = true;
           }
         }
@@ -317,18 +424,18 @@ const renderFrameToCanvas = (
           let emphasisGlow = false;
           if (isActiveWord && hasWordTiming && wordDuration > 0.5) {
             // Long word - add emphasis
-            emphasisScale = 1.0 + (wordProgress * 0.08); // Subtle scale
+            emphasisScale = 1.0 + wordProgress * 0.08; // Subtle scale
             emphasisGlow = true;
           }
 
           // Apply shadow for all text
-          ctx.shadowColor = 'rgba(0,0,0,0.8)';
+          ctx.shadowColor = "rgba(0,0,0,0.8)";
           ctx.shadowBlur = 20;
           ctx.shadowOffsetY = 4;
 
           // Draw ghost (inactive) text
-          ctx.fillStyle = 'rgba(255, 255, 255, 0.25)';
-          ctx.textAlign = 'left';
+          ctx.fillStyle = "rgba(255, 255, 255, 0.25)";
+          ctx.textAlign = "left";
           ctx.fillText(word, xPos, yPos);
 
           // Draw active text with gradient
@@ -340,17 +447,25 @@ const renderFrameToCanvas = (
               ctx.translate(-(xPos + wordWidth / 2), -yPos);
             }
 
-            const gradient = ctx.createLinearGradient(xPos, 0, xPos + wordWidth, 0);
-            gradient.addColorStop(0, '#ffffff');
-            gradient.addColorStop(Math.max(0, wordProgress - 0.1), '#ffffff');
-            gradient.addColorStop(Math.min(1, wordProgress + 0.1), 'rgba(255,255,255,0)');
-            gradient.addColorStop(1, 'rgba(255,255,255,0)');
+            const gradient = ctx.createLinearGradient(
+              xPos,
+              0,
+              xPos + wordWidth,
+              0,
+            );
+            gradient.addColorStop(0, "#ffffff");
+            gradient.addColorStop(Math.max(0, wordProgress - 0.1), "#ffffff");
+            gradient.addColorStop(
+              Math.min(1, wordProgress + 0.1),
+              "rgba(255,255,255,0)",
+            );
+            gradient.addColorStop(1, "rgba(255,255,255,0)");
 
             ctx.fillStyle = gradient;
 
             // Enhanced glow for active word
             if (isActiveWord || emphasisGlow) {
-              ctx.shadowColor = 'rgba(34, 211, 238, 0.8)';
+              ctx.shadowColor = "rgba(34, 211, 238, 0.8)";
               ctx.shadowBlur = emphasisGlow ? 40 : 25;
             }
 
@@ -362,14 +477,14 @@ const renderFrameToCanvas = (
         } else {
           // Simple mode: solid color transition
           if (wordProgress >= 1) {
-            ctx.fillStyle = '#22d3ee'; // cyan-400
+            ctx.fillStyle = "#22d3ee"; // cyan-400
           } else if (wordProgress > 0) {
             // Partially active
-            ctx.fillStyle = '#67e8f9'; // cyan-300
+            ctx.fillStyle = "#67e8f9"; // cyan-300
           } else {
-            ctx.fillStyle = '#94a3b8'; // slate-400
+            ctx.fillStyle = "#94a3b8"; // slate-400
           }
-          ctx.textAlign = 'left';
+          ctx.textAlign = "left";
           ctx.fillText(word, xPos, yPos);
         }
 
@@ -379,28 +494,37 @@ const renderFrameToCanvas = (
 
     // Translation
     if (activeSub.translation) {
-      const transY = baseY + (wrappedLines.length * lineHeight) + 40;
-      ctx.textAlign = 'center';
+      const transY = baseY + wrappedLines.length * lineHeight + 40;
+      ctx.textAlign = "center";
+
+      // Check if translation is RTL
+      const isTranslationRTL = isRTL(activeSub.translation);
 
       if (config.useModernEffects) {
-        ctx.font = '500 28px Inter, system-ui, sans-serif';
+        ctx.font = "500 28px Inter, system-ui, sans-serif";
         const transText = activeSub.translation;
         const transWidth = ctx.measureText(transText).width;
         const padding = 24;
 
         // Pill Background
         ctx.shadowBlur = 0;
-        ctx.fillStyle = 'rgba(15, 23, 42, 0.6)';
+        ctx.fillStyle = "rgba(15, 23, 42, 0.6)";
         ctx.beginPath();
-        ctx.roundRect((width / 2) - (transWidth / 2) - padding, transY - 20, transWidth + padding * 2, 40, 20);
+        ctx.roundRect(
+          width / 2 - transWidth / 2 - padding,
+          transY - 20,
+          transWidth + padding * 2,
+          40,
+          20,
+        );
         ctx.fill();
 
-        ctx.fillStyle = '#67e8f9';
+        ctx.fillStyle = "#67e8f9";
         ctx.fillText(transText, width / 2, transY + 2);
       } else {
-        ctx.font = 'italic 32px Inter, Arial, sans-serif';
-        ctx.fillStyle = '#a5f3fc';
-        ctx.shadowColor = 'rgba(0,0,0,0.8)';
+        ctx.font = "italic 32px Inter, Arial, sans-serif";
+        ctx.fillStyle = "#a5f3fc";
+        ctx.shadowColor = "rgba(0,0,0,0.8)";
         ctx.shadowBlur = 4;
         ctx.fillText(activeSub.translation, width / 2, transY);
         ctx.shadowBlur = 0;
@@ -409,86 +533,127 @@ const renderFrameToCanvas = (
 
     ctx.restore();
   }
-}
-
+};
 
 export const exportVideoWithFFmpeg = async (
   songData: SongData,
   onProgress: ProgressCallback,
   config: ExportConfig = {
-    orientation: 'landscape',
+    orientation: "landscape",
     useModernEffects: true,
     syncOffsetMs: -50,
     fadeOutBeforeCut: true,
-    wordLevelHighlight: true
-  }
+    wordLevelHighlight: true,
+    contentMode: "music",
+  },
 ): Promise<Blob> => {
-  const WIDTH = config.orientation === 'landscape' ? 1920 : 1080;
-  const HEIGHT = config.orientation === 'landscape' ? 1080 : 1920;
+  const WIDTH = config.orientation === "landscape" ? 1920 : 1080;
+  const HEIGHT = config.orientation === "landscape" ? 1080 : 1920;
   const FPS = 30;
   const BATCH_SIZE = 60; // Upload every 60 frames (2 seconds)
 
-  onProgress({ stage: 'preparing', progress: 0, message: 'Analyzing audio...' });
+  onProgress({
+    stage: "preparing",
+    progress: 0,
+    message: "Analyzing audio...",
+  });
 
   // 1. Fetch and Decode Audio
   const audioResponse = await fetch(songData.audioUrl);
   const audioBlob = await audioResponse.blob();
   const arrayBuffer = await audioBlob.arrayBuffer();
-  const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+  const audioContext = new (
+    window.AudioContext || (window as any).webkitAudioContext
+  )();
   const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
 
   // 2. Extract Frequency Data
   const frequencyDataArray = await extractFrequencyData(audioBuffer, FPS);
 
-  onProgress({ stage: 'preparing', progress: 10, message: 'Initializing render session...' });
+  onProgress({
+    stage: "preparing",
+    progress: 10,
+    message: "Initializing render session...",
+  });
 
   // 3. Initialize Session
   const initFormData = new FormData();
-  initFormData.append('audio', audioBlob, 'audio.mp3');
+  initFormData.append("audio", audioBlob, "audio.mp3");
 
   const initRes = await fetch(`${SERVER_URL}/api/export/init`, {
-    method: 'POST',
-    body: initFormData
+    method: "POST",
+    body: initFormData,
   });
 
   if (!initRes.ok) {
-    throw new Error('Failed to initialize export session');
+    throw new Error("Failed to initialize export session");
   }
 
   const { sessionId } = await initRes.json();
 
-  onProgress({ stage: 'preparing', progress: 20, message: 'Loading high-res assets...' });
+  onProgress({
+    stage: "preparing",
+    progress: 20,
+    message: "Loading high-res assets...",
+  });
 
-  // 4. Preload images
-  const imageAssets: { time: number; img: HTMLImageElement }[] = [];
+  // 4. Preload assets (images/videos)
+  const assets: RenderAsset[] = [];
   const sortedPrompts = [...songData.prompts].sort(
-    (a, b) => (a.timestampSeconds || 0) - (b.timestampSeconds || 0)
+    (a, b) => (a.timestampSeconds || 0) - (b.timestampSeconds || 0),
   );
 
   for (const prompt of sortedPrompts) {
-    const generated = songData.generatedImages.find(g => g.promptId === prompt.id);
+    const generated = songData.generatedImages.find(
+      (g) => g.promptId === prompt.id,
+    );
     if (generated) {
-      const img = new Image();
-      img.crossOrigin = "anonymous";
-      await new Promise<void>((resolve, reject) => {
-        img.onload = () => resolve();
-        img.onerror = reject;
-        img.src = generated.imageUrl;
-      });
-      imageAssets.push({ time: prompt.timestampSeconds || 0, img });
+      if (generated.type === "video") {
+        const vid = document.createElement("video");
+        vid.crossOrigin = "anonymous";
+        vid.src = generated.imageUrl;
+        vid.muted = true;
+        vid.preload = "auto";
+        await new Promise<void>((resolve) => {
+          vid.onloadeddata = () => resolve();
+          vid.onerror = () => resolve(); // fallback
+        });
+        assets.push({
+          time: prompt.timestampSeconds || 0,
+          type: "video",
+          element: vid,
+        });
+      } else {
+        const img = new Image();
+        img.crossOrigin = "anonymous";
+        await new Promise<void>((resolve, reject) => {
+          img.onload = () => resolve();
+          img.onerror = reject;
+          img.src = generated.imageUrl;
+        });
+        assets.push({
+          time: prompt.timestampSeconds || 0,
+          type: "image",
+          element: img,
+        });
+      }
     }
   }
 
   const duration = audioBuffer.duration;
   const totalFrames = Math.ceil(duration * FPS);
 
-  onProgress({ stage: 'rendering', progress: 0, message: 'Rendering cinematic frames...' });
+  onProgress({
+    stage: "rendering",
+    progress: 0,
+    message: "Rendering cinematic frames...",
+  });
 
   // 5. Create canvas
-  const canvas = document.createElement('canvas');
+  const canvas = document.createElement("canvas");
   canvas.width = WIDTH;
   canvas.height = HEIGHT;
-  const ctx = canvas.getContext('2d')!;
+  const ctx = canvas.getContext("2d")!;
 
   // Polyfill roundRect
   applyPolyfills(ctx);
@@ -502,41 +667,46 @@ export const exportVideoWithFFmpeg = async (
 
     const freqData = frequencyDataArray[frame] || new Uint8Array(128).fill(0);
 
-    renderFrameToCanvas(
+    await renderFrameToCanvas(
       ctx,
       WIDTH,
       HEIGHT,
       currentTime,
-      imageAssets,
+      assets,
       songData.parsedSubtitles,
       freqData,
       previousFreqData,
-      config
+      config,
     );
 
     previousFreqData = freqData;
 
     const blob = await new Promise<Blob>((resolve) => {
-      canvas.toBlob(b => resolve(b!), 'image/jpeg', 0.90);
+      canvas.toBlob((b) => resolve(b!), "image/jpeg", 0.9);
     });
 
     // Add to buffer
     frameBuffer.push({
       blob,
-      name: `frame${frame.toString().padStart(6, '0')}.jpg`
+      name: `frame${frame.toString().padStart(6, "0")}.jpg`,
     });
 
     // Upload if batch is full
     if (frameBuffer.length >= BATCH_SIZE) {
       const chunkFormData = new FormData();
-      frameBuffer.forEach(f => chunkFormData.append('frames', f.blob, f.name));
+      frameBuffer.forEach((f) =>
+        chunkFormData.append("frames", f.blob, f.name),
+      );
 
-      const chunkRes = await fetch(`${SERVER_URL}/api/export/chunk?sessionId=${sessionId}`, {
-        method: 'POST',
-        body: chunkFormData
-      });
+      const chunkRes = await fetch(
+        `${SERVER_URL}/api/export/chunk?sessionId=${sessionId}`,
+        {
+          method: "POST",
+          body: chunkFormData,
+        },
+      );
 
-      if (!chunkRes.ok) throw new Error('Failed to upload video chunk');
+      if (!chunkRes.ok) throw new Error("Failed to upload video chunk");
 
       frameBuffer = []; // Clear buffer
     }
@@ -544,39 +714,47 @@ export const exportVideoWithFFmpeg = async (
     // Update progress
     if (frame % FPS === 0) {
       const progress = Math.round((frame / totalFrames) * 90); // Cap "rendering" at 90%
-      onProgress({ stage: 'rendering', progress, message: `Rendering ${Math.floor(frame / FPS)}s / ${Math.floor(duration)}s` });
+      onProgress({
+        stage: "rendering",
+        progress,
+        message: `Rendering ${Math.floor(frame / FPS)}s / ${Math.floor(duration)}s`,
+      });
     }
   }
 
   // Upload remaining frames
   if (frameBuffer.length > 0) {
     const chunkFormData = new FormData();
-    frameBuffer.forEach(f => chunkFormData.append('frames', f.blob, f.name));
+    frameBuffer.forEach((f) => chunkFormData.append("frames", f.blob, f.name));
 
     await fetch(`${SERVER_URL}/api/export/chunk?sessionId=${sessionId}`, {
-      method: 'POST',
-      body: chunkFormData
+      method: "POST",
+      body: chunkFormData,
     });
   }
 
-  onProgress({ stage: 'encoding', progress: 95, message: 'Finalizing video on server...' });
+  onProgress({
+    stage: "encoding",
+    progress: 95,
+    message: "Finalizing video on server...",
+  });
 
   const finalizeRes = await fetch(`${SERVER_URL}/api/export/finalize`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ sessionId, fps: FPS })
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ sessionId, fps: FPS }),
   });
 
   if (!finalizeRes.ok) {
     const error = await finalizeRes.json();
-    throw new Error(error.error || 'Export failed');
+    throw new Error(error.error || "Export failed");
   }
 
-  onProgress({ stage: 'encoding', progress: 99, message: 'Downloading...' });
+  onProgress({ stage: "encoding", progress: 99, message: "Downloading..." });
 
   const videoBlob = await finalizeRes.blob();
 
-  onProgress({ stage: 'complete', progress: 100, message: 'Export complete!' });
+  onProgress({ stage: "complete", progress: 100, message: "Export complete!" });
 
   return videoBlob;
 };
@@ -585,79 +763,124 @@ export const exportVideoClientSide = async (
   songData: SongData,
   onProgress: ProgressCallback,
   config: ExportConfig = {
-    orientation: 'landscape',
+    orientation: "landscape",
     useModernEffects: true,
     syncOffsetMs: -50,
     fadeOutBeforeCut: true,
-    wordLevelHighlight: true
-  }
+    wordLevelHighlight: true,
+    contentMode: "music",
+  },
 ): Promise<Blob> => {
-  const WIDTH = config.orientation === 'landscape' ? 1920 : 1080;
-  const HEIGHT = config.orientation === 'landscape' ? 1080 : 1920;
+  const WIDTH = config.orientation === "landscape" ? 1920 : 1080;
+  const HEIGHT = config.orientation === "landscape" ? 1080 : 1920;
   const FPS = 30;
 
-  onProgress({ stage: 'loading', progress: 0, message: 'Loading FFmpeg Core...' });
+  onProgress({
+    stage: "loading",
+    progress: 0,
+    message: "Loading FFmpeg Core...",
+  });
 
   const ffmpeg = new FFmpeg();
-  const baseURL = 'https://unpkg.com/@ffmpeg/core@0.12.10/dist/esm';
-  
+  const baseURL = "https://unpkg.com/@ffmpeg/core@0.12.10/dist/esm";
+
   try {
-      await ffmpeg.load({
-          coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`, 'text/javascript'),
-          wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, 'application/wasm'),
-      });
+    await ffmpeg.load({
+      coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`, "text/javascript"),
+      wasmURL: await toBlobURL(
+        `${baseURL}/ffmpeg-core.wasm`,
+        "application/wasm",
+      ),
+    });
   } catch (e) {
-      console.error("FFmpeg load failed", e);
-      throw new Error("Failed to load FFmpeg. Check browser compatibility.");
+    console.error("FFmpeg load failed", e);
+    throw new Error("Failed to load FFmpeg. Check browser compatibility.");
   }
 
-  onProgress({ stage: 'preparing', progress: 0, message: 'Analyzing audio...' });
+  onProgress({
+    stage: "preparing",
+    progress: 0,
+    message: "Analyzing audio...",
+  });
 
   // 1. Fetch and Decode Audio
   const audioResponse = await fetch(songData.audioUrl);
   const audioBlob = await audioResponse.blob();
   const arrayBuffer = await audioBlob.arrayBuffer();
-  const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+  const audioContext = new (
+    window.AudioContext || (window as any).webkitAudioContext
+  )();
   const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
 
   // Write audio to FFmpeg FS
-  await ffmpeg.writeFile('audio.mp3', await fetchFile(audioBlob));
+  await ffmpeg.writeFile("audio.mp3", await fetchFile(audioBlob));
 
   // 2. Extract Frequency Data
   const frequencyDataArray = await extractFrequencyData(audioBuffer, FPS);
 
-  onProgress({ stage: 'preparing', progress: 20, message: 'Loading high-res assets...' });
+  onProgress({
+    stage: "preparing",
+    progress: 20,
+    message: "Loading high-res assets...",
+  });
 
-  // 3. Preload images
-  const imageAssets: { time: number; img: HTMLImageElement }[] = [];
+  // 3. Preload assets
+  const assets: RenderAsset[] = [];
   const sortedPrompts = [...songData.prompts].sort(
-    (a, b) => (a.timestampSeconds || 0) - (b.timestampSeconds || 0)
+    (a, b) => (a.timestampSeconds || 0) - (b.timestampSeconds || 0),
   );
 
   for (const prompt of sortedPrompts) {
-    const generated = songData.generatedImages.find(g => g.promptId === prompt.id);
+    const generated = songData.generatedImages.find(
+      (g) => g.promptId === prompt.id,
+    );
     if (generated) {
-      const img = new Image();
-      img.crossOrigin = "anonymous";
-      await new Promise<void>((resolve, reject) => {
-        img.onload = () => resolve();
-        img.onerror = reject;
-        img.src = generated.imageUrl;
-      });
-      imageAssets.push({ time: prompt.timestampSeconds || 0, img });
+      if (generated.type === "video") {
+        const vid = document.createElement("video");
+        vid.crossOrigin = "anonymous";
+        vid.src = generated.imageUrl;
+        vid.muted = true;
+        vid.preload = "auto";
+        await new Promise<void>((resolve) => {
+          vid.onloadeddata = () => resolve();
+          vid.onerror = () => resolve(); // fallback
+        });
+        assets.push({
+          time: prompt.timestampSeconds || 0,
+          type: "video",
+          element: vid,
+        });
+      } else {
+        const img = new Image();
+        img.crossOrigin = "anonymous";
+        await new Promise<void>((resolve, reject) => {
+          img.onload = () => resolve();
+          img.onerror = reject;
+          img.src = generated.imageUrl;
+        });
+        assets.push({
+          time: prompt.timestampSeconds || 0,
+          type: "image",
+          element: img,
+        });
+      }
     }
   }
 
   const duration = audioBuffer.duration;
   const totalFrames = Math.ceil(duration * FPS);
 
-  onProgress({ stage: 'rendering', progress: 0, message: 'Rendering frames...' });
+  onProgress({
+    stage: "rendering",
+    progress: 0,
+    message: "Rendering frames...",
+  });
 
   // 4. Create canvas
-  const canvas = document.createElement('canvas');
+  const canvas = document.createElement("canvas");
   canvas.width = WIDTH;
   canvas.height = HEIGHT;
-  const ctx = canvas.getContext('2d')!;
+  const ctx = canvas.getContext("2d")!;
 
   // Polyfill roundRect
   applyPolyfills(ctx);
@@ -669,54 +892,69 @@ export const exportVideoClientSide = async (
     const currentTime = frame / FPS;
     const freqData = frequencyDataArray[frame] || new Uint8Array(128).fill(0);
 
-    renderFrameToCanvas(
+    await renderFrameToCanvas(
       ctx,
       WIDTH,
       HEIGHT,
       currentTime,
-      imageAssets,
+      assets,
       songData.parsedSubtitles,
       freqData,
       previousFreqData,
-      config
+      config,
     );
 
     previousFreqData = freqData;
 
     // Convert canvas to binary for FFmpeg
-    // We use a lower quality JPEG for speed in WASM, or PNG for quality. 
+    // We use a lower quality JPEG for speed in WASM, or PNG for quality.
     // JPEG is much faster to encode.
     const blob = await new Promise<Blob>((resolve) => {
-      canvas.toBlob(b => resolve(b!), 'image/jpeg', 0.90);
+      canvas.toBlob((b) => resolve(b!), "image/jpeg", 0.9);
     });
-    
-    const frameName = `frame${frame.toString().padStart(6, '0')}.jpg`;
+
+    const frameName = `frame${frame.toString().padStart(6, "0")}.jpg`;
     await ffmpeg.writeFile(frameName, await fetchFile(blob));
 
     // Update progress
     if (frame % FPS === 0) {
-      const progress = Math.round((frame / totalFrames) * 80); 
-      onProgress({ stage: 'rendering', progress, message: `Rendering ${Math.floor(frame / FPS)}s / ${Math.floor(duration)}s` });
+      const progress = Math.round((frame / totalFrames) * 80);
+      onProgress({
+        stage: "rendering",
+        progress,
+        message: `Rendering ${Math.floor(frame / FPS)}s / ${Math.floor(duration)}s`,
+      });
     }
   }
 
-  onProgress({ stage: 'encoding', progress: 85, message: 'Encoding MP4 (WASM)...' });
+  onProgress({
+    stage: "encoding",
+    progress: 85,
+    message: "Encoding MP4 (WASM)...",
+  });
 
   // 6. Run FFmpeg
   await ffmpeg.exec([
-    '-framerate', String(FPS),
-    '-i', 'frame%06d.jpg',
-    '-i', 'audio.mp3',
-    '-c:v', 'libx264',
-    '-pix_fmt', 'yuv420p',
-    '-shortest',
-    '-preset', 'ultrafast', // Speed over size for browser
-    'output.mp4'
+    "-framerate",
+    String(FPS),
+    "-i",
+    "frame%06d.jpg",
+    "-i",
+    "audio.mp3",
+    "-c:v",
+    "libx264",
+    "-pix_fmt",
+    "yuv420p",
+    "-shortest",
+    "-preset",
+    "ultrafast", // Speed over size for browser
+    "output.mp4",
   ]);
 
-  onProgress({ stage: 'complete', progress: 100, message: 'Done!' });
+  onProgress({ stage: "complete", progress: 100, message: "Done!" });
 
   // 7. Read output
-  const data = await ffmpeg.readFile('output.mp4');
-  return new Blob([data], { type: 'video/mp4' });
+  const data = (await ffmpeg.readFile("output.mp4")) as Uint8Array;
+  // Create a new Uint8Array to ensure it's backed by ArrayBuffer (not SharedArrayBuffer)
+  return new Blob([data.slice()], { type: "video/mp4" });
 };

@@ -1,9 +1,17 @@
-import React, { useRef, useEffect, useState } from 'react';
-import { Play, Pause, RotateCcw, Activity, Circle, Waves, Sparkles } from 'lucide-react';
-import { SubtitleItem } from '../types';
-import { Button } from '@/components/ui/button';
-import { cn } from '@/lib/utils';
-import { Card } from '@/components/ui/card';
+import React, { useRef, useEffect, useState } from "react";
+import {
+  Play,
+  Pause,
+  RotateCcw,
+  Activity,
+  Circle,
+  Waves,
+  Sparkles,
+} from "lucide-react";
+import { SubtitleItem } from "../types";
+import { Button } from "@/components/ui/button";
+import { cn, isRTL } from "@/lib/utils";
+import { Card } from "@/components/ui/card";
 
 interface TimelinePlayerProps {
   audioUrl: string;
@@ -16,12 +24,22 @@ interface TimelinePlayerProps {
   onTimeUpdate: (time: number) => void;
   onDurationChange: (duration: number) => void;
   onEnded: () => void;
+  /** Content mode - "music" shows visualizer, "story" hides it */
+  contentMode?: "music" | "story";
 }
 
-type VisualizerMode = 'bars' | 'circular' | 'wave' | 'particles';
+type VisualizerMode = "bars" | "circular" | "wave" | "particles";
 
 class ParticleSystem {
-  particles: { x: number; y: number; vx: number; vy: number; life: number; color: string; size: number }[] = [];
+  particles: {
+    x: number;
+    y: number;
+    vx: number;
+    vy: number;
+    life: number;
+    color: string;
+    size: number;
+  }[] = [];
 
   update(width: number, height: number, bassEnergy: number) {
     if (bassEnergy > 230) {
@@ -34,7 +52,7 @@ class ParticleSystem {
           vy: (Math.random() - 0.5) * 10,
           life: 1.0,
           color: `hsl(${Math.random() * 60 + 180}, 100%, 70%)`,
-          size: Math.random() * 4 + 1
+          size: Math.random() * 4 + 1,
         });
       }
     }
@@ -53,15 +71,15 @@ class ParticleSystem {
   }
 
   draw(ctx: CanvasRenderingContext2D) {
-    ctx.globalCompositeOperation = 'lighter';
-    this.particles.forEach(p => {
+    ctx.globalCompositeOperation = "lighter";
+    this.particles.forEach((p) => {
       ctx.beginPath();
       ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
       ctx.fillStyle = p.color;
       ctx.globalAlpha = p.life;
       ctx.fill();
     });
-    ctx.globalCompositeOperation = 'source-over';
+    ctx.globalCompositeOperation = "source-over";
     ctx.globalAlpha = 1.0;
   }
 }
@@ -76,15 +94,18 @@ export const TimelinePlayer: React.FC<TimelinePlayerProps> = ({
   onSeek,
   onTimeUpdate,
   onDurationChange,
-  onEnded
+  onEnded,
+  contentMode = "music",
 }) => {
   const audioRef = useRef<HTMLAudioElement>(null);
   const progressBarRef = useRef<HTMLDivElement>(null);
   const waveformCanvasRef = useRef<HTMLCanvasElement>(null);
   const visualizerCanvasRef = useRef<HTMLCanvasElement>(null);
 
-  const [waveformBuffer, setWaveformBuffer] = useState<AudioBuffer | null>(null);
-  const [visualizerMode, setVisualizerMode] = useState<VisualizerMode>('wave');
+  const [waveformBuffer, setWaveformBuffer] = useState<AudioBuffer | null>(
+    null,
+  );
+  const [visualizerMode, setVisualizerMode] = useState<VisualizerMode>("wave");
 
   const audioContextRef = useRef<AudioContext | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
@@ -92,9 +113,22 @@ export const TimelinePlayer: React.FC<TimelinePlayerProps> = ({
   const animationFrameRef = useRef<number | null>(null);
   const particleSystemRef = useRef<ParticleSystem>(new ParticleSystem());
 
+  // Only enable visualizer for music mode
+  const showVisualizer = contentMode === "music";
+
   useEffect(() => {
+    // Skip visualizer setup for story mode
+    if (!showVisualizer) {
+      if (animationFrameRef.current) {
+        cancelAnimationFrame(animationFrameRef.current);
+      }
+      return;
+    }
+
     if (!isPlaying) {
-      if (animationFrameRef.current) cancelAnimationFrame(animationFrameRef.current);
+      if (animationFrameRef.current) {
+        cancelAnimationFrame(animationFrameRef.current);
+      }
       return;
     }
 
@@ -102,7 +136,9 @@ export const TimelinePlayer: React.FC<TimelinePlayerProps> = ({
       if (!audioRef.current) return;
 
       if (!audioContextRef.current) {
-        audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
+        audioContextRef.current = new (
+          window.AudioContext || (window as any).webkitAudioContext
+        )();
       }
 
       const ctx = audioContextRef.current;
@@ -111,21 +147,26 @@ export const TimelinePlayer: React.FC<TimelinePlayerProps> = ({
         try {
           sourceRef.current = ctx.createMediaElementSource(audioRef.current);
           analyserRef.current = ctx.createAnalyser();
-          analyserRef.current.fftSize = visualizerMode === 'wave' ? 2048 : 256;
+          analyserRef.current.fftSize = visualizerMode === "wave" ? 2048 : 256;
           analyserRef.current.smoothingTimeConstant = 0.8;
 
           sourceRef.current.connect(analyserRef.current);
           analyserRef.current.connect(ctx.destination);
         } catch (e) {
-          console.warn("MediaElementSource already connected or error:", e);
+          console.warn("AudioContext already connected");
         }
       }
 
       if (analyserRef.current) {
-        analyserRef.current.fftSize = visualizerMode === 'circular' ? 512 : (visualizerMode === 'wave' ? 2048 : 256);
+        analyserRef.current.fftSize =
+          visualizerMode === "circular"
+            ? 512
+            : visualizerMode === "wave"
+              ? 2048
+              : 256;
       }
 
-      if (ctx.state === 'suspended') {
+      if (ctx.state === "suspended") {
         ctx.resume();
       }
 
@@ -135,16 +176,18 @@ export const TimelinePlayer: React.FC<TimelinePlayerProps> = ({
     initAudioContext();
 
     return () => {
-      if (animationFrameRef.current) cancelAnimationFrame(animationFrameRef.current);
+      if (animationFrameRef.current) {
+        cancelAnimationFrame(animationFrameRef.current);
+      }
     };
-  }, [isPlaying, visualizerMode]);
+  }, [isPlaying, visualizerMode, showVisualizer]);
 
   const startRenderLoop = () => {
     const canvas = visualizerCanvasRef.current;
     const analyser = analyserRef.current;
     if (!canvas || !analyser) return;
 
-    const ctx = canvas.getContext('2d');
+    const ctx = canvas.getContext("2d");
     if (!ctx) return;
 
     const dpr = window.devicePixelRatio || 1;
@@ -152,6 +195,7 @@ export const TimelinePlayer: React.FC<TimelinePlayerProps> = ({
     canvas.width = rect.width * dpr;
     canvas.height = rect.height * dpr;
     ctx.scale(dpr, dpr);
+
     const width = rect.width;
     const height = rect.height;
 
@@ -165,13 +209,13 @@ export const TimelinePlayer: React.FC<TimelinePlayerProps> = ({
       ctx.clearRect(0, 0, width, height);
 
       switch (visualizerMode) {
-        case 'circular':
+        case "circular":
           drawCircular(ctx, width, height, dataArray, bufferLength);
           break;
-        case 'wave':
+        case "wave":
           drawWave(ctx, width, height, dataArray, bufferLength);
           break;
-        case 'particles':
+        case "particles":
           drawParticles(ctx, width, height, dataArray, bufferLength);
           break;
         default:
@@ -184,47 +228,65 @@ export const TimelinePlayer: React.FC<TimelinePlayerProps> = ({
     render();
   };
 
-  const drawBars = (ctx: CanvasRenderingContext2D, w: number, h: number, data: Uint8Array, len: number) => {
+  const drawBars = (
+    ctx: CanvasRenderingContext2D,
+    w: number,
+    h: number,
+    data: Uint8Array,
+    len: number,
+  ) => {
     const barWidth = (w / len) * 2.5;
     let x = 0;
 
     const gradient = ctx.createLinearGradient(0, h, 0, 0);
-    gradient.addColorStop(0, 'rgba(34, 211, 238, 0.1)');
-    gradient.addColorStop(0.5, 'rgba(34, 211, 238, 0.8)');
-    gradient.addColorStop(1, 'rgba(167, 139, 250, 0.9)');
+    gradient.addColorStop(0, "rgba(34, 211, 238, 0.1)");
+    gradient.addColorStop(0.5, "rgba(34, 211, 238, 0.8)");
+    gradient.addColorStop(1, "rgba(167, 139, 250, 0.9)");
 
     ctx.fillStyle = gradient;
 
-    for (let i = 0; i < len; i++) {
-      const barHeight = (data[i] / 255) * h * 0.8;
+    for (let i = 0; i < len / 2; i++) {
+      const barHeight = (data[i] / 255) * h;
       const centerX = w / 2;
       const offset = i * (barWidth + 1);
 
       ctx.fillRect(centerX + offset, h - barHeight, barWidth, barHeight);
-      ctx.fillRect(centerX - offset - barWidth, h - barHeight, barWidth, barHeight);
+      ctx.fillRect(
+        centerX - offset - barWidth,
+        h - barHeight,
+        barWidth,
+        barHeight,
+      );
 
       x += barWidth + 1;
       if (x > w) break;
     }
   };
 
-  const drawCircular = (ctx: CanvasRenderingContext2D, w: number, h: number, data: Uint8Array, len: number) => {
+  const drawCircular = (
+    ctx: CanvasRenderingContext2D,
+    w: number,
+    h: number,
+    data: Uint8Array,
+    len: number,
+  ) => {
     const cx = w / 2;
     const cy = h / 2;
     const radius = Math.min(w, h) * 0.3;
 
     ctx.lineWidth = 2;
-    ctx.lineCap = 'round';
+    ctx.lineCap = "round";
     ctx.shadowBlur = 15;
-    ctx.shadowColor = '#22d3ee';
+    ctx.shadowColor = "#22d3ee";
 
     const angleStep = (Math.PI * 2) / len;
 
+    ctx.strokeStyle = "rgba(34, 211, 238, 0.8)";
     ctx.beginPath();
     for (let i = 0; i < len; i += 2) {
       const value = data[i];
-      const barHeight = (value / 255) * 60;
-      const angle = i * angleStep;
+      const barHeight = (value / 255) * radius * 0.8;
+      const angle = i * angleStep - Math.PI / 2;
 
       const xStart = cx + Math.cos(angle) * radius;
       const yStart = cy + Math.sin(angle) * radius;
@@ -234,43 +296,47 @@ export const TimelinePlayer: React.FC<TimelinePlayerProps> = ({
       ctx.moveTo(xStart, yStart);
       ctx.lineTo(xEnd, yEnd);
     }
-    ctx.strokeStyle = `rgba(34, 211, 238, 0.8)`;
     ctx.stroke();
 
     ctx.shadowBlur = 5;
-    ctx.shadowColor = '#a78bfa';
+    ctx.shadowColor = "#a78bfa";
     ctx.beginPath();
     for (let i = 0; i < len; i += 4) {
       const value = data[len - i - 1];
-      if (value < 50) continue;
-      const barHeight = (value / 255) * 40;
+      const barHeight = (value / 255) * radius * 0.5;
+
       const angle = i * angleStep - Math.PI / 2;
 
-      const rOuter = radius + 70;
-      const xStart = cx + Math.cos(angle) * rOuter;
-      const yStart = cy + Math.sin(angle) * rOuter;
-      const xEnd = cx + Math.cos(angle) * (rOuter + barHeight);
-      const yEnd = cy + Math.sin(angle) * (rOuter + barHeight);
+      const rOuter = radius * 0.6;
+      const xStart = cx + Math.cos(angle) * (rOuter - barHeight);
+      const yStart = cy + Math.sin(angle) * (rOuter - barHeight);
+      const xEnd = cx + Math.cos(angle) * rOuter;
+      const yEnd = cy + Math.sin(angle) * rOuter;
 
       ctx.moveTo(xStart, yStart);
       ctx.lineTo(xEnd, yEnd);
     }
-    ctx.strokeStyle = `rgba(167, 139, 250, 0.6)`;
     ctx.stroke();
     ctx.shadowBlur = 0;
   };
 
-  const drawWave = (ctx: CanvasRenderingContext2D, w: number, h: number, data: Uint8Array, len: number) => {
+  const drawWave = (
+    ctx: CanvasRenderingContext2D,
+    w: number,
+    h: number,
+    data: Uint8Array,
+    len: number,
+  ) => {
     ctx.lineWidth = 3;
     const gradient = ctx.createLinearGradient(0, h, 0, h / 2);
-    gradient.addColorStop(0, 'rgba(34, 211, 238, 0.0)');
-    gradient.addColorStop(0.5, 'rgba(34, 211, 238, 0.2)');
-    gradient.addColorStop(1, 'rgba(167, 139, 250, 0.4)');
+    gradient.addColorStop(0, "rgba(34, 211, 238, 0.0)");
+    gradient.addColorStop(0.5, "rgba(34, 211, 238, 0.2)");
+    gradient.addColorStop(1, "rgba(167, 139, 250, 0.4)");
 
     const strokeGradient = ctx.createLinearGradient(0, 0, w, 0);
-    strokeGradient.addColorStop(0, '#22d3ee');
-    strokeGradient.addColorStop(0.5, '#a78bfa');
-    strokeGradient.addColorStop(1, '#22d3ee');
+    strokeGradient.addColorStop(0, "#22d3ee");
+    strokeGradient.addColorStop(0.5, "#a78bfa");
+    strokeGradient.addColorStop(1, "#22d3ee");
 
     const sliceWidth = w / (len / 3);
     let x = 0;
@@ -281,17 +347,18 @@ export const TimelinePlayer: React.FC<TimelinePlayerProps> = ({
     let lastX = 0;
     let lastY = h;
 
-    const step = 4;
+    const step = 2;
     for (let i = 0; i < len / 3; i += step) {
       const value = data[i];
       const percent = value / 255;
-      const y = h - (percent * h * 0.6) - 20;
+      const y = h - percent * h * 0.6 - 20;
 
       const nextX = i * sliceWidth * step;
       const xc = (lastX + (x + sliceWidth * step)) / 2;
       const yc = (lastY + y) / 2;
 
       ctx.quadraticCurveTo(lastX, lastY, xc, yc);
+
       lastX = x + sliceWidth * step;
       lastY = y;
       x += sliceWidth * step;
@@ -301,11 +368,18 @@ export const TimelinePlayer: React.FC<TimelinePlayerProps> = ({
     ctx.closePath();
     ctx.fillStyle = gradient;
     ctx.fill();
+
     ctx.strokeStyle = strokeGradient;
     ctx.stroke();
   };
 
-  const drawParticles = (ctx: CanvasRenderingContext2D, w: number, h: number, data: Uint8Array, len: number) => {
+  const drawParticles = (
+    ctx: CanvasRenderingContext2D,
+    w: number,
+    h: number,
+    data: Uint8Array,
+    _len: number,
+  ) => {
     const bassEnergy = data.slice(0, 10).reduce((a, b) => a + b, 0) / 10;
     if (bassEnergy > 200) {
       ctx.fillStyle = `rgba(34, 211, 238, ${0.05 + (bassEnergy / 255) * 0.05})`;
@@ -314,7 +388,7 @@ export const TimelinePlayer: React.FC<TimelinePlayerProps> = ({
     const radius = 50 + (bassEnergy / 255) * 30;
     ctx.beginPath();
     ctx.arc(w / 2, h / 2, radius, 0, Math.PI * 2);
-    ctx.fillStyle = 'rgba(167, 139, 250, 0.2)';
+    ctx.fillStyle = "rgba(167, 139, 250, 0.2)";
     ctx.fill();
     particleSystemRef.current.update(w, h, bassEnergy);
     particleSystemRef.current.draw(ctx);
@@ -323,7 +397,7 @@ export const TimelinePlayer: React.FC<TimelinePlayerProps> = ({
   useEffect(() => {
     if (audioRef.current) {
       if (isPlaying) {
-        audioRef.current.play().catch(e => console.error("Play error:", e));
+        audioRef.current.play().catch((e) => console.error("Play error:", e));
       } else {
         audioRef.current.pause();
       }
@@ -331,22 +405,26 @@ export const TimelinePlayer: React.FC<TimelinePlayerProps> = ({
   }, [isPlaying]);
 
   useEffect(() => {
-    if (audioRef.current && Math.abs(audioRef.current.currentTime - currentTime) > 0.5) {
+    if (
+      audioRef.current &&
+      Math.abs(audioRef.current.currentTime - currentTime) > 0.5
+    ) {
       audioRef.current.currentTime = currentTime;
     }
   }, [currentTime]);
 
   useEffect(() => {
-    if (!audioUrl) return;
     const loadAudioData = async () => {
       try {
         const response = await fetch(audioUrl);
         const arrayBuffer = await response.arrayBuffer();
-        const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+        const audioContext = new (
+          window.AudioContext || (window as any).webkitAudioContext
+        )();
         const decodedBuffer = await audioContext.decodeAudioData(arrayBuffer);
         setWaveformBuffer(decodedBuffer);
       } catch (error) {
-        console.error("Error generating waveform:", error);
+        console.error("Failed to load audio waveform", error);
       }
     };
     loadAudioData();
@@ -355,7 +433,7 @@ export const TimelinePlayer: React.FC<TimelinePlayerProps> = ({
   useEffect(() => {
     const canvas = waveformCanvasRef.current;
     if (!canvas || !waveformBuffer) return;
-    const ctx = canvas.getContext('2d');
+    const ctx = canvas.getContext("2d");
     if (!ctx) return;
     const parent = canvas.parentElement;
     if (parent) {
@@ -368,7 +446,7 @@ export const TimelinePlayer: React.FC<TimelinePlayerProps> = ({
     const step = Math.ceil(data.length / width);
     const amp = height / 2;
     ctx.clearRect(0, 0, width, height);
-    ctx.fillStyle = '#334155';
+    ctx.fillStyle = "#334155";
     for (let i = 0; i < width; i++) {
       let min = 1.0;
       let max = -1.0;
@@ -377,16 +455,18 @@ export const TimelinePlayer: React.FC<TimelinePlayerProps> = ({
         if (datum < min) min = datum;
         if (datum > max) max = datum;
       }
-      const barHeight = Math.max(2, (max - min) * amp);
-      const y = (height - barHeight) / 2;
-      ctx.fillRect(i, y, 1, barHeight);
+      const barHeight = (max - min) * amp;
+      const y = (1 + min) * amp;
+      ctx.fillRect(i, y, 1, Math.max(1, barHeight));
     }
   }, [waveformBuffer]);
 
-  const handleSeek = (e: React.MouseEvent<HTMLDivElement> | React.TouchEvent<HTMLDivElement>) => {
+  const handleSeek = (
+    e: React.MouseEvent<HTMLDivElement> | React.TouchEvent<HTMLDivElement>,
+  ) => {
     if (progressBarRef.current && duration > 0) {
       const rect = progressBarRef.current.getBoundingClientRect();
-      const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX;
+      const clientX = "touches" in e ? e.touches[0].clientX : e.clientX;
       const x = clientX - rect.left;
       const percentage = Math.min(Math.max(x / rect.width, 0), 1);
       const newTime = percentage * duration;
@@ -398,35 +478,46 @@ export const TimelinePlayer: React.FC<TimelinePlayerProps> = ({
     const mins = Math.floor(time / 60);
     const secs = Math.floor(time % 60);
     const ms = Math.floor((time % 1) * 100);
-    return `${mins}:${secs.toString().padStart(2, '0')}.${ms.toString().padStart(2, '0')}`;
+    return `${mins}:${secs.toString().padStart(2, "0")}.${ms.toString().padStart(2, "0")}`;
   };
 
   const activeSubtitle = subtitles.find(
-    s => currentTime >= s.startTime && currentTime <= s.endTime
+    (s) => currentTime >= s.startTime && currentTime <= s.endTime,
   );
 
   let karaokeStyle: React.CSSProperties = {};
+  const isActiveSubtitleRTL = activeSubtitle
+    ? isRTL(activeSubtitle.text)
+    : false;
+  const isActiveTranslationRTL = activeSubtitle?.translation
+    ? isRTL(activeSubtitle.translation)
+    : false;
+
   if (activeSubtitle) {
     const totalDuration = activeSubtitle.endTime - activeSubtitle.startTime;
-    const progress = Math.max(0, Math.min(1, (currentTime - activeSubtitle.startTime) / totalDuration));
+    const progress = Math.max(
+      0,
+      Math.min(1, (currentTime - activeSubtitle.startTime) / totalDuration),
+    );
     const percent = Math.floor(progress * 100);
-    // Hardcoded hex values replaced with semantic colors will break inline style.
-    // Keeping hex here for gradient effect as CSS vars are tricky in inline gradients without polyfill.
-    // But we match the primary color #22d3ee (Cyan 400).
+    // For RTL languages, reverse the gradient direction (270deg instead of 90deg)
+    const gradientDirection = isActiveSubtitleRTL ? "270deg" : "90deg";
     karaokeStyle = {
-      backgroundImage: `linear-gradient(90deg, #22d3ee ${percent}%, #94a3b8 ${percent}%)`,
-      WebkitBackgroundClip: 'text',
-      WebkitTextFillColor: 'transparent',
-      backgroundClip: 'text',
-      color: 'transparent'
+      backgroundImage: `linear-gradient(${gradientDirection}, #22d3ee ${percent}%, #94a3b8 ${percent}%)`,
+      WebkitBackgroundClip: "text",
+      WebkitTextFillColor: "transparent",
+      backgroundClip: "text",
+      color: "transparent",
+      direction: isActiveSubtitleRTL ? "rtl" : "ltr",
+      unicodeBidi: "isolate",
     };
   }
 
   const visuals = [
-    { id: 'wave', icon: Waves, label: 'Fluid' },
-    { id: 'circular', icon: Circle, label: 'Radial' },
-    { id: 'particles', icon: Sparkles, label: 'Particles' },
-    { id: 'bars', icon: Activity, label: 'Bars' },
+    { id: "wave", icon: Waves, label: "Fluid" },
+    { id: "circular", icon: Circle, label: "Radial" },
+    { id: "particles", icon: Sparkles, label: "Particles" },
+    { id: "bars", icon: Activity, label: "Bars" },
   ];
 
   return (
@@ -441,42 +532,66 @@ export const TimelinePlayer: React.FC<TimelinePlayerProps> = ({
       />
 
       <div className="aspect-video w-full flex items-center justify-center text-center p-8 bg-black rounded-xl border border-border relative overflow-hidden group">
-        <canvas
-          ref={visualizerCanvasRef}
-          className="absolute inset-0 w-full h-full opacity-60 z-0 pointer-events-none"
-        />
+        {/* Only render visualizer canvas in music mode */}
+        {showVisualizer && (
+          <canvas
+            ref={visualizerCanvasRef}
+            className="absolute inset-0 w-full h-full opacity-60 z-0 pointer-events-none"
+          />
+        )}
         <div className="absolute inset-0 bg-linear-to-t from-background/90 via-transparent to-background/40 z-1 pointer-events-none"></div>
 
-        <div className="absolute top-4 right-4 z-20 flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity duration-300">
-          {visuals.map((v) => (
-            <Button
-              key={v.id}
-              variant="outline"
-              size="icon"
-              onClick={() => setVisualizerMode(v.id as VisualizerMode)}
-              className={cn(
-                "h-8 w-8 hover:bg-muted",
-                visualizerMode === v.id ? "bg-primary/20 border-primary text-primary" : "bg-black/40 border-border text-muted-foreground"
-              )}
-              title={v.label}
-            >
-              <v.icon size={16} />
-            </Button>
-          ))}
-        </div>
+        {/* Only show visualizer controls in music mode */}
+        {showVisualizer && (
+          <div className="absolute top-4 right-4 z-20 flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity duration-300">
+            {visuals.map((v) => (
+              <Button
+                key={v.id}
+                variant="outline"
+                size="icon"
+                onClick={() => setVisualizerMode(v.id as VisualizerMode)}
+                className={cn(
+                  "h-8 w-8 hover:bg-muted",
+                  visualizerMode === v.id
+                    ? "bg-primary/20 border-primary text-primary"
+                    : "bg-black/40 border-border text-muted-foreground",
+                )}
+                title={v.label}
+              >
+                <v.icon size={16} />
+              </Button>
+            ))}
+          </div>
+        )}
 
         <div className="relative z-10 max-w-2xl flex flex-col gap-4">
           {activeSubtitle ? (
             <div className="animate-in fade-in slide-in-from-bottom-2 duration-200">
-              <p className="text-2xl md:text-3xl lg:text-4xl font-bold leading-relaxed drop-shadow-xl">
+              <p
+                className="text-2xl md:text-3xl lg:text-4xl font-bold leading-relaxed drop-shadow-xl"
+                style={{
+                  direction: isActiveSubtitleRTL ? "rtl" : "ltr",
+                  textAlign: "center",
+                }}
+              >
                 <span className="bg-background/40 px-4 py-2 rounded-lg box-decoration-clone inline-block backdrop-blur-sm">
-                  <span style={karaokeStyle} className="transition-all duration-75">
+                  <span
+                    style={karaokeStyle}
+                    className="transition-all duration-75"
+                  >
                     {activeSubtitle.text}
                   </span>
                 </span>
               </p>
               {activeSubtitle.translation && (
-                <p className="text-lg md:text-xl text-primary/80 mt-2 font-light italic opacity-90 drop-shadow-md">
+                <p
+                  className="text-lg md:text-xl text-primary/80 mt-2 font-light italic opacity-90 drop-shadow-md"
+                  style={{
+                    direction: isActiveTranslationRTL ? "rtl" : "ltr",
+                    textAlign: "center",
+                    unicodeBidi: "isolate",
+                  }}
+                >
                   {activeSubtitle.translation}
                 </p>
               )}
@@ -497,7 +612,7 @@ export const TimelinePlayer: React.FC<TimelinePlayerProps> = ({
           onClick={handleSeek}
           onTouchStart={handleSeek}
           onTouchMove={handleSeek}
-          style={{ touchAction: 'none' }}
+          style={{ touchAction: "none" }}
         >
           <canvas
             ref={waveformCanvasRef}
@@ -505,23 +620,25 @@ export const TimelinePlayer: React.FC<TimelinePlayerProps> = ({
           />
 
           <div className="absolute inset-0 w-full h-full">
-            {subtitles.map(sub => {
+            {subtitles.map((sub) => {
               const left = (sub.startTime / duration) * 100;
               const width = ((sub.endTime - sub.startTime) / duration) * 100;
-              const isActive = currentTime >= sub.startTime && currentTime <= sub.endTime;
+              const isActive =
+                currentTime >= sub.startTime && currentTime <= sub.endTime;
 
               return (
                 <div
                   key={sub.id}
                   className={`absolute bottom-0 h-3 rounded-t-sm transition-all duration-200 pointer-events-none border-x border-background/20
-                    ${isActive
-                      ? 'bg-primary z-10 h-4 shadow-[0_0_15px_rgba(34,211,238,0.6)]'
-                      : 'bg-accent hover:bg-accent/80 h-3'
+                    ${
+                      isActive
+                        ? "bg-primary z-10 h-4 shadow-[0_0_15px_rgba(34,211,238,0.6)]"
+                        : "bg-accent hover:bg-accent/80 h-3"
                     }
                   `}
                   style={{
                     left: `${left}%`,
-                    width: `${Math.max(width, 0.2)}%`
+                    width: `${Math.max(width, 0.2)}%`,
                   }}
                 />
               );
@@ -529,40 +646,47 @@ export const TimelinePlayer: React.FC<TimelinePlayerProps> = ({
           </div>
 
           <div
-            className="absolute top-0 h-full w-0.5 bg-foreground shadow-[0_0_8px_rgba(255,255,255,0.8)] z-20 pointer-events-none"
+            className="absolute top-0 h-full bg-primary/20 pointer-events-none"
+            style={{ width: `${(currentTime / duration) * 100}%` }}
+          />
+
+          <div
+            className="absolute top-0 w-0.5 h-full bg-primary shadow-[0_0_10px_rgba(34,211,238,0.8)] z-20 pointer-events-none"
             style={{ left: `${(currentTime / duration) * 100}%` }}
-          >
-            <div className="absolute -top-1 -left-1.5 w-3.5 h-3.5 bg-foreground rounded-full shadow-sm"></div>
-          </div>
+          />
         </div>
 
-        <div className="flex items-center justify-between mt-1 px-1">
-          <div className="text-xs font-mono text-primary font-medium w-20">
+        <div className="flex items-center justify-between gap-4">
+          <span className="font-mono text-xs text-muted-foreground tabular-nums w-24">
             {formatTime(currentTime)}
-          </div>
+          </span>
 
-          <div className="flex items-center gap-6">
+          <div className="flex items-center gap-2">
             <Button
               variant="ghost"
               size="icon"
               onClick={() => onSeek(0)}
-              className="rounded-full text-muted-foreground hover:text-foreground hover:bg-muted/50"
-              title="Restart"
+              className="h-9 w-9 text-muted-foreground hover:text-foreground"
             >
-              <RotateCcw size={18} />
+              <RotateCcw size={16} />
             </Button>
-
             <Button
+              variant="default"
+              size="icon"
               onClick={onPlayPause}
               className="w-14 h-14 rounded-full bg-primary hover:bg-primary/90 text-primary-foreground flex items-center justify-center transition-all active:scale-95 shadow-lg shadow-primary/30 border border-primary/20 p-0"
             >
-              {isPlaying ? <Pause size={24} fill="currentColor" /> : <Play size={24} fill="currentColor" className="ml-1" />}
+              {isPlaying ? (
+                <Pause size={24} fill="currentColor" />
+              ) : (
+                <Play size={24} fill="currentColor" className="ml-1" />
+              )}
             </Button>
           </div>
 
-          <div className="text-xs font-mono text-muted-foreground w-20 text-right">
+          <span className="font-mono text-xs text-muted-foreground tabular-nums w-24 text-right">
             {formatTime(duration)}
-          </div>
+          </span>
         </div>
       </div>
     </Card>
