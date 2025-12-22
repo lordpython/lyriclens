@@ -27,6 +27,7 @@ import {
   Settings2,
   Layers,
   Play,
+  Target,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -73,6 +74,39 @@ const LANGUAGES = [
   "Arabic",
 ];
 
+const VIDEO_PURPOSES = [
+  {
+    value: "music_video",
+    label: "Music Video",
+    description: "Cinematic, emotional, dramatic scenes",
+  },
+  {
+    value: "social_short",
+    label: "Social Short",
+    description: "TikTok/Reels - bold, fast-paced",
+  },
+  {
+    value: "documentary",
+    label: "Documentary",
+    description: "Realistic, informative visuals",
+  },
+  {
+    value: "commercial",
+    label: "Commercial/Ad",
+    description: "Clean, product-focused, persuasive",
+  },
+  {
+    value: "podcast_visual",
+    label: "Podcast Visual",
+    description: "Ambient, non-distracting backgrounds",
+  },
+  {
+    value: "lyric_video",
+    label: "Lyric Video",
+    description: "Space for text overlays",
+  },
+];
+
 export default function App() {
   const {
     appState,
@@ -85,12 +119,14 @@ export default function App() {
     globalSubject,
     aspectRatio,
     generationMode,
+    videoPurpose,
     setGenerationMode,
     videoProvider,
     setVideoProvider,
     setAspectRatio,
     setGlobalSubject,
     setContentType,
+    setVideoPurpose,
     handleFileSelect,
     handleImageGenerated,
     handleGenerateAll,
@@ -199,6 +235,37 @@ export default function App() {
                   </SelectItem>
                 </SelectContent>
               </Select>
+            </div>
+
+            {/* Video Purpose */}
+            <div className="space-y-2">
+              <label className="text-xs font-medium text-foreground/70 px-2 flex items-center gap-2">
+                <Target size={12} className="text-accent" />
+                Video Purpose
+              </label>
+              <Select
+                value={videoPurpose}
+                onValueChange={(val: any) => setVideoPurpose(val)}
+              >
+                <SelectTrigger className="bg-background/80 border-border/50 text-foreground h-10 hover:bg-background hover:border-primary/30 transition-colors">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {VIDEO_PURPOSES.map((purpose) => (
+                    <SelectItem key={purpose.value} value={purpose.value}>
+                      <div className="flex flex-col items-start">
+                        <span className="font-medium">{purpose.label}</span>
+                        <span className="text-[10px] text-muted-foreground">
+                          {purpose.description}
+                        </span>
+                      </div>
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-[10px] text-muted-foreground/60 px-2">
+                Optimizes scene composition & pacing
+              </p>
             </div>
 
             {/* Output Format */}
@@ -345,9 +412,7 @@ export default function App() {
                 />
                 <Input
                   value={globalSubject}
-                  onChange={(e) =>
-                    setGlobalSubject(e.target.value)
-                  }
+                  onChange={(e) => setGlobalSubject(e.target.value)}
                   placeholder="e.g. A red robot, a girl with blue hair"
                   className="pl-9 bg-background/80 border-border/50 text-foreground h-10 focus-visible:ring-primary/30 focus-visible:border-primary/50 hover:border-primary/30 transition-colors placeholder:text-muted-foreground/40"
                 />
@@ -472,8 +537,7 @@ export default function App() {
         <header className="hidden md:flex h-14 border-b border-border/30 bg-card/60 backdrop-blur-xl items-center justify-between px-6 shrink-0 z-10 sticky top-0">
           <div className="flex items-center gap-4">
             {songData ? (
-              <div className="flex items-center gap-3[300px]">
-">
+              <div className="flex items-center gap-3">
                 <div className="w-8 h-8 rounded-lg bg-primary/10 flex items-center justify-center">
                   <Music size={16} className="text-primary" />
                 </div>

@@ -9,6 +9,7 @@ import {
   generateVideoFromPrompt,
   refineImagePrompt,
   translateSubtitles,
+  VideoPurpose,
 } from "../services/geminiService";
 import { animateImageWithDeApi } from "../services/deapiService";
 import { subtitlesToSRT } from "../utils/srtParser";
@@ -21,6 +22,7 @@ export function useLyricLens() {
   const [contentType, setContentType] = useState<"music" | "story">("music");
   const [globalSubject, setGlobalSubject] = useState("");
   const [aspectRatio, setAspectRatio] = useState("16:9");
+  const [videoPurpose, setVideoPurpose] = useState<VideoPurpose>("music_video");
   const [generationMode, setGenerationMode] = useState<"image" | "video">(
     "image",
   );
@@ -63,12 +65,22 @@ export function useLyricLens() {
 
       setAppState(AppState.ANALYZING_LYRICS);
 
-      // 4. Generate Prompts based on Content Type
+      // 4. Generate Prompts based on Content Type (now with global subject & purpose)
       let prompts;
       if (contentType === "story") {
-        prompts = await generatePromptsFromStory(srt, selectedStyle);
+        prompts = await generatePromptsFromStory(
+          srt,
+          selectedStyle,
+          globalSubject,
+          videoPurpose,
+        );
       } else {
-        prompts = await generatePromptsFromLyrics(srt, selectedStyle);
+        prompts = await generatePromptsFromLyrics(
+          srt,
+          selectedStyle,
+          globalSubject,
+          videoPurpose,
+        );
       }
 
       partialData.prompts = prompts;
@@ -260,6 +272,7 @@ export function useLyricLens() {
     setAspectRatio("16:9");
     setGenerationMode("image");
     setVideoProvider("veo");
+    setVideoPurpose("music_video");
   };
 
   return {
@@ -273,12 +286,14 @@ export function useLyricLens() {
     globalSubject,
     aspectRatio,
     generationMode,
+    videoPurpose,
     setGenerationMode,
     videoProvider,
     setVideoProvider,
     setAspectRatio,
     setGlobalSubject,
     setContentType,
+    setVideoPurpose,
     handleFileSelect,
     handleImageGenerated,
     handleGenerateAll,

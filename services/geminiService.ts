@@ -71,6 +71,49 @@ type PromptRefinementIntent =
   | "shorten"
   | "fix_repetition";
 
+/**
+ * Video purpose/platform - dramatically affects visual style and pacing
+ */
+export type VideoPurpose =
+  | "music_video" // Cinematic, emotional, longer scenes
+  | "social_short" // TikTok/Reels/Shorts - fast cuts, bold visuals, vertical-friendly
+  | "documentary" // Realistic, informative, b-roll style
+  | "commercial" // Product-focused, clean, persuasive
+  | "podcast_visual" // Minimal, ambient, non-distracting
+  | "lyric_video"; // Text-friendly spaces, typography-aware compositions
+
+/**
+ * Camera angles for visual variety
+ */
+const CAMERA_ANGLES = [
+  "wide establishing shot",
+  "medium shot",
+  "close-up",
+  "extreme close-up on details",
+  "low angle looking up",
+  "high angle looking down",
+  "over-the-shoulder",
+  "dutch angle",
+  "tracking shot",
+  "aerial/drone view",
+];
+
+/**
+ * Lighting moods for emotional progression
+ */
+const LIGHTING_MOODS = [
+  "golden hour warm lighting",
+  "cool blue moonlight",
+  "dramatic chiaroscuro shadows",
+  "soft diffused overcast",
+  "neon-lit urban glow",
+  "harsh midday sun",
+  "candlelit intimate warmth",
+  "silhouette backlighting",
+  "foggy atmospheric haze",
+  "studio three-point lighting",
+];
+
 type PromptLintIssueCode =
   | "too_short"
   | "too_long"
@@ -460,45 +503,166 @@ export const transcribeAudio = async (
   });
 };
 
+/**
+ * Get purpose-specific instructions for prompt generation
+ */
+const getPurposeGuidance = (purpose: VideoPurpose): string => {
+  const guidance: Record<VideoPurpose, string> = {
+    music_video: `
+PURPOSE: Music Video (Cinematic, Emotional)
+- Create dramatic, emotionally resonant scenes that amplify the music's feeling
+- Use cinematic compositions with depth and layers
+- Match visual intensity to musical intensity (verse=calm, chorus=dynamic)
+- Aim for 4-6 second average scene duration
+- Include atmospheric elements (particles, light rays, reflections)`,
+
+    social_short: `
+PURPOSE: Social Media Short (TikTok/Reels/Shorts)
+- Bold, eye-catching visuals that pop on small screens
+- High contrast, vibrant colors, immediate visual impact
+- Fast-paced energy, dynamic compositions
+- Vertical-friendly framing (subject centered, minimal side detail)
+- Trendy aesthetics, modern and relatable imagery`,
+
+    documentary: `
+PURPOSE: Documentary/Educational
+- Realistic, grounded visuals that inform and explain
+- B-roll style imagery that supports narration
+- Clear, unambiguous scenes that illustrate concepts
+- Professional, trustworthy aesthetic
+- Mix of wide establishing shots and detail close-ups`,
+
+    commercial: `
+PURPOSE: Commercial/Advertisement
+- Clean, polished, aspirational imagery
+- Product/subject should be hero of each frame
+- Lifestyle-oriented scenes showing benefits/emotions
+- Professional lighting, minimal distractions
+- Call-to-action friendly compositions`,
+
+    podcast_visual: `
+PURPOSE: Podcast/Audio Visualization
+- Ambient, non-distracting background visuals
+- Abstract or environmental scenes
+- Calm, steady imagery that doesn't compete with spoken content
+- Subtle movement potential, meditative quality
+- Longer scene durations (8-15 seconds)`,
+
+    lyric_video: `
+PURPOSE: Lyric Video
+- Compositions with clear negative space for text overlay
+- Avoid busy centers where lyrics will appear
+- Backgrounds that provide contrast for readability
+- Thematic imagery that supports but doesn't overwhelm
+- Consider lower-third and center-frame text placement areas`,
+  };
+
+  return guidance[purpose] || guidance.music_video;
+};
+
+/**
+ * Enhanced prompt generation instruction with visual storytelling
+ */
 const getPromptGenerationInstruction = (
   style: string,
   mode: "lyrics" | "story",
   content: string,
+  globalSubject: string = "",
+  purpose: VideoPurpose = "music_video",
 ) => {
-  const baseInstruction = `Analyze this ${mode === "lyrics" ? "SRT lyrics" : "spoken-word transcript"} to create a visual storyboard. Art Style: "${style}".`;
+  const contentType =
+    mode === "lyrics" ? "song lyrics" : "spoken-word/narrative transcript";
+  const purposeGuidance = getPurposeGuidance(purpose);
 
-  const specificInstruction =
+  const subjectBlock = globalSubject.trim()
+    ? `
+MAIN SUBJECT (must appear consistently in relevant scenes):
+"${globalSubject}"
+- Keep this subject's appearance, clothing, and key features consistent
+- Reference specific visual details (hair color, outfit, distinguishing features)
+- The subject should be the visual anchor across scenes`
+    : `
+MAIN SUBJECT: None specified
+- Create cohesive scenes with consistent environmental/thematic elements
+- If characters appear, maintain their appearance across scenes`;
+
+  const structureGuidance =
     mode === "lyrics"
-      ? `1. Identify song structure.
-       2. Visual Consistency: maintain specific style without text/logos.
-       3. Generate 8-12 detailed prompts (60-100 words each).
-       4. Align timestamp with section start.`
-      : `1. Identify narrative segments (Intro, Scene changes, Key concepts).
-       2. Visual Consistency: maintain specific style. No text/logos.
-       3. Generate 8-12 detailed prompts (60-100 words each).
-       4. Align timestamp with the start of the concept/scene.`;
+      ? `
+SONG STRUCTURE ANALYSIS:
+1. Identify sections: Intro, Verse, Pre-Chorus, Chorus, Bridge, Outro
+2. Verses = introspective, storytelling, character moments
+3. Choruses = emotional peaks, dynamic visuals, wider shots
+4. Bridge = visual contrast, unexpected angle or setting
+5. Match energy: quiet sections → intimate close-ups; loud sections → epic wide shots`
+      : `
+NARRATIVE STRUCTURE ANALYSIS:
+1. Identify segments: Introduction, Key Points, Transitions, Conclusion
+2. Opening = establishing context, setting the scene
+3. Main content = illustrating concepts, showing examples
+4. Transitions = visual bridges between ideas
+5. Conclusion = reinforcing main message, memorable closing image`;
 
-  return `${baseInstruction}
+  const visualVariety = `
+VISUAL VARIETY REQUIREMENTS:
+- Camera angles to use across scenes: ${CAMERA_ANGLES.slice(0, 6).join(", ")}
+- Lighting variations: ${LIGHTING_MOODS.slice(0, 5).join(", ")}
+- NEVER repeat the same camera angle in consecutive scenes
+- Create an emotional arc: establish → build → climax → resolve
+- Each prompt must specify: subject, action/pose, setting, lighting, camera angle, mood`;
 
-  Instructions:
-  ${specificInstruction}
+  return `You are a professional music video director and visual storyteller creating an image storyboard.
 
-  Content:
-  ${content.slice(0, 15000)}
+TASK: Analyze this ${contentType} and generate a visual storyboard with detailed image prompts.
 
-  Return JSON object with 'prompts' array. Each item: { text, mood, timestamp }`;
+ART STYLE: "${style}"
+${subjectBlock}
+${purposeGuidance}
+${structureGuidance}
+${visualVariety}
+
+PROMPT WRITING RULES:
+1. Each prompt must be 60-120 words with SPECIFIC visual details
+2. Include: subject + action + environment + lighting + camera angle + atmosphere
+3. NO text, typography, subtitles, logos, watermarks, or UI elements
+4. NO generic phrases like "beautiful", "stunning", "amazing" - be SPECIFIC
+5. Reference the main subject by their specific features, not just "the subject"
+6. Vary compositions: rule-of-thirds, centered, symmetrical, asymmetrical
+7. Include sensory details: textures, materials, weather, time of day
+
+EMOTIONAL ARC:
+- Scene 1-2: Establish mood and setting (wide shots, context)
+- Scene 3-5: Build intensity (medium shots, character focus)
+- Scene 6-8: Peak emotion (dynamic angles, close-ups, action)
+- Scene 9-12: Resolution/reflection (pull back, contemplative)
+
+CONTENT TO ANALYZE:
+${content.slice(0, 15000)}
+
+OUTPUT: Generate 8-12 prompts as JSON with 'prompts' array.
+Each item: { "text": "detailed visual prompt", "mood": "emotional tone", "timestamp": "MM:SS" }
+
+Timestamps should align with natural section breaks in the content.`;
 };
 
 const generatePrompts = async (
   srtContent: string,
   style: string,
   mode: "lyrics" | "story",
+  globalSubject: string = "",
+  purpose: VideoPurpose = "music_video",
 ): Promise<ImagePrompt[]> => {
   return withRetry(async () => {
     try {
       const response = await ai.models.generateContent({
         model: MODELS.TEXT,
-        contents: getPromptGenerationInstruction(style, mode, srtContent),
+        contents: getPromptGenerationInstruction(
+          style,
+          mode,
+          srtContent,
+          globalSubject,
+          purpose,
+        ),
         config: {
           responseMimeType: "application/json",
           responseSchema: {
@@ -543,12 +707,16 @@ const generatePrompts = async (
 export const generatePromptsFromLyrics = (
   srtContent: string,
   style: string = "Cinematic",
-) => generatePrompts(srtContent, style, "lyrics");
+  globalSubject: string = "",
+  purpose: VideoPurpose = "music_video",
+) => generatePrompts(srtContent, style, "lyrics", globalSubject, purpose);
 
 export const generatePromptsFromStory = (
   srtContent: string,
   style: string = "Cinematic",
-) => generatePrompts(srtContent, style, "story");
+  globalSubject: string = "",
+  purpose: VideoPurpose = "documentary",
+) => generatePrompts(srtContent, style, "story", globalSubject, purpose);
 
 export const refineImagePrompt = async (params: {
   promptText: string;
