@@ -19,13 +19,17 @@ console.warn = (...args) => {
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, ".", "");
+  const isMobileBuild = process.env.CAPACITOR_BUILD === 'true';
+
   return {
+    // Use relative paths for Capacitor mobile builds
+    base: isMobileBuild ? './' : '/',
     server: {
       port: 3000,
-      // Use localhost to ensure COOP/COEP headers work properly
-      // (required for SharedArrayBuffer in FFmpeg WASM)
       host: "localhost",
-      headers: {
+      // COOP/COEP headers for SharedArrayBuffer (FFmpeg WASM) - web only
+      // These headers break mobile WebViews, so only apply in web dev mode
+      headers: isMobileBuild ? {} : {
         "Cross-Origin-Opener-Policy": "same-origin",
         "Cross-Origin-Embedder-Policy": "require-corp",
       },
@@ -51,6 +55,25 @@ export default defineConfig(({ mode }) => {
     },
     optimizeDeps: {
       exclude: ["@ffmpeg/ffmpeg", "@ffmpeg/util"],
+    },
+    build: {
+      rollupOptions: {
+        output: {
+          manualChunks: {
+            'vendor-genai': ['@google/genai'],
+            'vendor-motion': ['framer-motion'],
+            'vendor-radix': [
+              '@radix-ui/react-dialog',
+              '@radix-ui/react-dropdown-menu',
+              '@radix-ui/react-select',
+              '@radix-ui/react-scroll-area',
+              '@radix-ui/react-slider',
+              '@radix-ui/react-switch',
+              '@radix-ui/react-progress',
+            ],
+          },
+        },
+      },
     },
   };
 });

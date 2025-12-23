@@ -12,6 +12,7 @@ dist
 dist-ssr
 *.local
 temp
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
@@ -22,7 +23,29 @@ temp
 *.njsproj
 *.sln
 *.sw?
-*.kiro
+
+# Kiro
 .kiro/
-kiro.\*
-.kiro\specs
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# Test data (generated/sample files)
+test_data/
+
+# Android build artifacts
+android/.gradle/
+android/.idea/
+android/.kotlin/
+android/build/
+android/local.properties
+android/capacitor-cordova-android-plugins/
+
+# Screenshots and images (if generated)
+*.png
+!public/*.png
+
+# OS files
+Thumbs.db

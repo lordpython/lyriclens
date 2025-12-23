@@ -12,6 +12,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { motion, AnimatePresence } from "framer-motion";
+import { SERVER_URL } from "@/services/ffmpegService";
 
 interface FileUploadProps {
   onFileSelect: (file: File) => void;
@@ -57,7 +58,7 @@ export const FileUpload: React.FC<FileUploadProps> = ({
 
     setIsLoading(true);
     try {
-      const response = await fetch("http://localhost:3001/api/import/youtube", {
+      const response = await fetch(`${SERVER_URL}/api/import/youtube`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ url: youtubeUrl }),
@@ -101,7 +102,7 @@ export const FileUpload: React.FC<FileUploadProps> = ({
         className={cn(
           "relative overflow-hidden transition-all duration-500",
           "border-2 border-dashed",
-          "bg-gradient-to-br from-card/80 via-card/60 to-card/40",
+          "bg-linear-to-br from-card/80 via-card/60 to-card/40",
           "backdrop-blur-xl",
           isDragging
             ? "border-primary bg-primary/5 scale-[1.02] shadow-2xl shadow-primary/20"
@@ -119,7 +120,7 @@ export const FileUpload: React.FC<FileUploadProps> = ({
         <div
           className={cn(
             "absolute inset-0 opacity-0 transition-opacity duration-500",
-            "bg-gradient-to-br from-primary/10 via-accent/5 to-transparent",
+            "bg-linear-to-br from-primary/10 via-accent/5 to-transparent",
             (isDragging || isHovering) && "opacity-100",
           )}
         />
@@ -207,16 +208,16 @@ export const FileUpload: React.FC<FileUploadProps> = ({
               <motion.div
                 className={cn(
                   "absolute inset-0 rounded-full",
-                  "bg-gradient-to-r from-primary via-accent to-primary",
+                  "bg-linear-to-r from-primary via-accent to-primary",
                   "opacity-0 blur-xl transition-opacity duration-500",
                   isHovering && "opacity-40",
                 )}
                 animate={
                   isHovering
                     ? {
-                        scale: [1, 1.2, 1],
-                        rotate: [0, 180, 360],
-                      }
+                      scale: [1, 1.2, 1],
+                      rotate: [0, 180, 360],
+                    }
                     : {}
                 }
                 transition={{ duration: 3, repeat: Infinity, ease: "linear" }}
@@ -226,7 +227,7 @@ export const FileUpload: React.FC<FileUploadProps> = ({
               <motion.div
                 className={cn(
                   "relative p-1 rounded-full",
-                  "bg-gradient-to-r from-primary/50 via-accent/50 to-primary/50",
+                  "bg-linear-to-r from-primary/50 via-accent/50 to-primary/50",
                 )}
                 animate={isHovering ? { rotate: 360 } : { rotate: 0 }}
                 transition={{ duration: 8, repeat: Infinity, ease: "linear" }}
@@ -235,7 +236,7 @@ export const FileUpload: React.FC<FileUploadProps> = ({
                 <div
                   className={cn(
                     "p-6 rounded-full transition-all duration-500",
-                    "bg-gradient-to-br from-card via-card to-background",
+                    "bg-linear-to-br from-card via-card to-background",
                     "border border-border/50",
                     "group-hover:from-primary/10 group-hover:via-card group-hover:to-card",
                   )}
@@ -313,11 +314,11 @@ export const FileUpload: React.FC<FileUploadProps> = ({
           {/* Divider */}
           <div className="w-full max-w-sm mt-8 relative z-10">
             <div className="flex items-center gap-4 w-full">
-              <div className="h-px bg-gradient-to-r from-transparent via-border to-transparent flex-1" />
+              <div className="h-px bg-linear-to-r from-transparent via-border to-transparent flex-1" />
               <span className="text-xs text-muted-foreground font-medium uppercase tracking-wider">
                 or import
               </span>
-              <div className="h-px bg-gradient-to-r from-transparent via-border to-transparent flex-1" />
+              <div className="h-px bg-linear-to-r from-transparent via-border to-transparent flex-1" />
             </div>
           </div>
 
@@ -362,7 +363,7 @@ export const FileUpload: React.FC<FileUploadProps> = ({
                 disabled={isLoading || disabled || !youtubeUrl.trim()}
                 className={cn(
                   "h-11 px-5",
-                  "bg-gradient-to-r from-red-600 to-red-500",
+                  "bg-linear-to-r from-red-600 to-red-500",
                   "hover:from-red-500 hover:to-red-400",
                   "text-white font-semibold",
                   "shadow-lg shadow-red-500/20",
@@ -397,7 +398,7 @@ export const FileUpload: React.FC<FileUploadProps> = ({
         <div
           className={cn(
             "absolute bottom-0 left-0 right-0 h-1",
-            "bg-gradient-to-r from-transparent via-primary/50 to-transparent",
+            "bg-linear-to-r from-transparent via-primary/50 to-transparent",
             "opacity-0 transition-opacity duration-500",
             (isDragging || isHovering) && "opacity-100",
           )}

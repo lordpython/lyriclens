@@ -1,10 +1,43 @@
-import { SongData } from "../types";
+import { SongData, TransitionType } from "../types";
 import { extractFrequencyData } from "../utils/audioAnalysis";
 import { FFmpeg } from "@ffmpeg/ffmpeg";
 import { fetchFile, toBlobURL } from "@ffmpeg/util";
 import { applyPolyfills, isRTL } from "../lib/utils";
+import { isNative, isAndroid, isFFmpegWasmSupported, getRecommendedExportEngine } from "../utils/platformUtils";
 
-const SERVER_URL = "http://localhost:3001";
+/**
+ * Get the server URL based on the current platform
+ * - Android emulator: 10.0.2.2 (special alias for host machine)
+ * - iOS simulator: localhost works
+ * - Web browser: localhost
+ */
+const getServerUrl = (): string => {
+  if (isAndroid()) {
+    // Android emulator uses 10.0.2.2 to reach host machine's localhost
+    return "http://10.0.2.2:3001";
+  }
+  // iOS simulator and web use localhost
+  return "http://localhost:3001";
+};
+
+// Dynamic SERVER_URL based on platform
+export const SERVER_URL = getServerUrl();
+
+/**
+ * Check if client-side FFmpeg WASM export is available on this platform
+ * Returns false on mobile (Capacitor) as SharedArrayBuffer is not supported in WebViews
+ */
+export const isClientSideExportAvailable = (): boolean => {
+  return isFFmpegWasmSupported();
+};
+
+/**
+ * Get the recommended export engine for current platform
+ * Mobile apps should use 'cloud' rendering, web can use 'browser' if supported
+ */
+export const getDefaultExportEngine = (): 'cloud' | 'browser' => {
+  return getRecommendedExportEngine();
+};
 
 export type ExportProgress = {
   stage: "loading" | "preparing" | "rendering" | "encoding" | "complete";
@@ -21,6 +54,8 @@ export interface ExportConfig {
   fadeOutBeforeCut: boolean; // Fade lyrics 0.3s before image transition
   wordLevelHighlight: boolean; // Enable per-word karaoke vs. per-line
   contentMode: "music" | "story"; // "story" disables audio visualizer
+  transitionType: TransitionType; // Type of transition between scenes
+  transitionDuration: number; // Duration in seconds (default: 1.5)
 }
 
 type RenderAsset = {
@@ -126,30 +161,94 @@ const renderFrameToCanvas = async (
   };
 
   if (currentAsset?.element) {
-    if (config.useModernEffects) {
-      // Cross-fade logic
-      const TRANSITION_DURATION = 1.5; // seconds
-      const timeUntilNext = nextAsset ? nextAsset.time - currentTime : Infinity;
+    const TRANSITION_DURATION = config.transitionDuration || 1.5;
+    const timeUntilNext = nextAsset ? nextAsset.time - currentTime : Infinity;
+    const isTransitioning = timeUntilNext < TRANSITION_DURATION && nextAsset;
 
-      if (timeUntilNext < TRANSITION_DURATION && nextAsset) {
-        // Transitioning OUT
-        const transitionProgress = 1 - timeUntilNext / TRANSITION_DURATION;
-
-        // Draw current (fading out)
-        await drawAsset(currentAsset, slideProgress, 1);
-
-        // Draw next (fading in)
-        // Next slide starts at 0 progress relative to itself
-        // But since we are PRE-displaying it, we need to handle its video timing correctly
-        // (offset by timeUntilNext)
-        await drawAsset(nextAsset, 0, transitionProgress, -timeUntilNext);
-      } else {
-        // Normal draw
-        await drawAsset(currentAsset, slideProgress, 1);
-      }
+    if (config.transitionType === "none" || !isTransitioning) {
+      // No transition or not in transition window - just draw current
+      const useKenBurns = config.useModernEffects && config.transitionType !== "none";
+      await drawAsset(currentAsset, useKenBurns ? slideProgress : 0, 1);
     } else {
-      // Simple cut
-      await drawAsset(currentAsset, 0, 1);
+      // Calculate transition progress (0 = just started, 1 = complete)
+      const t = 1 - timeUntilNext / TRANSITION_DURATION;
+
+      switch (config.transitionType) {
+        case "fade": {
+          // Fade through black
+          if (t < 0.5) {
+            // First half: fade out current to black
+            await drawAsset(currentAsset, slideProgress, 1 - t * 2);
+          } else {
+            // Second half: fade in next from black
+            await drawAsset(nextAsset, 0, (t - 0.5) * 2, -timeUntilNext);
+          }
+          break;
+        }
+
+        case "dissolve": {
+          // Cross-dissolve (blend both)
+          await drawAsset(currentAsset, slideProgress, 1);
+          await drawAsset(nextAsset, 0, t, -timeUntilNext);
+          break;
+        }
+
+        case "zoom": {
+          // Zoom into current, then show next
+          ctx.save();
+          const zoomScale = 1 + t * 0.5; // Zoom up to 1.5x
+          const centerX = width / 2;
+          const centerY = height / 2;
+          ctx.translate(centerX, centerY);
+          ctx.scale(zoomScale, zoomScale);
+          ctx.translate(-centerX, -centerY);
+          ctx.globalAlpha = 1 - t;
+
+          // Draw current (zooming in and fading out)
+          const element = currentAsset.element;
+          const naturalWidth = currentAsset.type === "video"
+            ? (element as HTMLVideoElement).videoWidth
+            : (element as HTMLImageElement).width;
+          const naturalHeight = currentAsset.type === "video"
+            ? (element as HTMLVideoElement).videoHeight
+            : (element as HTMLImageElement).height;
+          const scale = Math.max(width / naturalWidth, height / naturalHeight);
+          const drawWidth = naturalWidth * scale;
+          const drawHeight = naturalHeight * scale;
+          const x = (width - drawWidth) / 2;
+          const y = (height - drawHeight) / 2;
+          ctx.drawImage(element, x, y, drawWidth, drawHeight);
+          ctx.restore();
+
+          // Draw next (fading in underneath)
+          await drawAsset(nextAsset, 0, t, -timeUntilNext);
+          break;
+        }
+
+        case "slide": {
+          // Slide left - current slides out left, next slides in from right
+          const slideOffset = t * width;
+
+          // Draw current (sliding left)
+          ctx.save();
+          ctx.translate(-slideOffset, 0);
+          await drawAsset(currentAsset, slideProgress, 1);
+          ctx.restore();
+
+          // Draw next (sliding in from right)
+          ctx.save();
+          ctx.translate(width - slideOffset, 0);
+          await drawAsset(nextAsset, 0, 1, -timeUntilNext);
+          ctx.restore();
+          break;
+        }
+
+        default: {
+          // Fallback: simple dissolve
+          await drawAsset(currentAsset, slideProgress, 1);
+          await drawAsset(nextAsset, 0, t, -timeUntilNext);
+        }
+      }
     }
   }
 
@@ -373,8 +472,14 @@ const renderFrameToCanvas = async (
         let isActiveWord = false;
         let wordDuration = 0;
 
-        if (hasWordTiming && activeSub.words![globalWordIdx]) {
-          const wordTiming = activeSub.words![globalWordIdx];
+        // For RTL text, we need to map the display index to the original timing index
+        // The words are reversed for display, so we need to reverse the timing lookup
+        const timingWordIdx = isTextRTL
+          ? (activeSub.words?.length || displayWords.length) - 1 - globalWordIdx
+          : globalWordIdx;
+
+        if (hasWordTiming && activeSub.words![timingWordIdx]) {
+          const wordTiming = activeSub.words![timingWordIdx];
           const wordStart = wordTiming.startTime;
           const wordEnd = wordTiming.endTime;
           wordDuration = wordEnd - wordStart;
@@ -387,13 +492,12 @@ const renderFrameToCanvas = async (
           }
         } else {
           // Fallback: calculate progress based on character position
-          // For RTL, we need to calculate from the end of the text
           const originalWords = hasWordTiming
             ? activeSub.words!.map((w) => w.word)
             : activeSub.text.split(" ");
           const originalFullText = originalWords.join(" ");
 
-          // Map back to original index for RTL
+          // For RTL, use the timing index which is already mapped correctly
           const originalIdx = isTextRTL
             ? originalWords.length - 1 - globalWordIdx
             : globalWordIdx;
@@ -545,6 +649,8 @@ export const exportVideoWithFFmpeg = async (
     fadeOutBeforeCut: true,
     wordLevelHighlight: true,
     contentMode: "music",
+    transitionType: "dissolve",
+    transitionDuration: 1.5,
   },
 ): Promise<Blob> => {
   const WIDTH = config.orientation === "landscape" ? 1920 : 1080;
@@ -769,6 +875,8 @@ export const exportVideoClientSide = async (
     fadeOutBeforeCut: true,
     wordLevelHighlight: true,
     contentMode: "music",
+    transitionType: "dissolve",
+    transitionDuration: 1.5,
   },
 ): Promise<Blob> => {
   const WIDTH = config.orientation === "landscape" ? 1920 : 1080;

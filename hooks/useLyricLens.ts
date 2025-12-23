@@ -9,6 +9,7 @@ import {
   generateVideoFromPrompt,
   refineImagePrompt,
   translateSubtitles,
+  generateMotionPrompt,
   VideoPurpose,
 } from "../services/geminiService";
 import { animateImageWithDeApi } from "../services/deapiService";
@@ -27,11 +28,21 @@ export function useLyricLens() {
     "image",
   );
   const [videoProvider, setVideoProvider] = useState<"veo" | "deapi">("veo");
+  const [pendingFile, setPendingFile] = useState<File | null>(null);
 
   // Translation State
   const [isTranslating, setIsTranslating] = useState(false);
 
-  const handleFileSelect = async (file: File, selectedStyle: string) => {
+  const handleFileSelect = (file: File) => {
+    setErrorMsg(null);
+    setPendingFile(file);
+    setAppState(AppState.CONFIGURING);
+  };
+
+  const startProcessing = async (selectedStyle: string) => {
+    if (!pendingFile) return;
+    const file = pendingFile;
+
     try {
       setErrorMsg(null);
       setAppState(AppState.PROCESSING_AUDIO);
@@ -183,10 +194,17 @@ export function useLyricLens() {
           );
           baseImageUrl = imgBase64;
 
-          // 2. Animate (DeAPI)
+          // 2. Generate motion-optimized prompt for animation
+          const motionPrompt = await generateMotionPrompt(
+            refinedPrompt,
+            prompt.mood || "cinematic",
+            globalSubject,
+          );
+
+          // 3. Animate with motion-focused prompt (DeAPI)
           base64 = await animateImageWithDeApi(
             imgBase64,
-            refinedPrompt,
+            motionPrompt,
             selectedAspectRatio as "16:9" | "9:16" | "1:1",
           );
           resultType = "video";
@@ -265,6 +283,7 @@ export function useLyricLens() {
   const resetApp = () => {
     setAppState(AppState.IDLE);
     setSongData(null);
+    setPendingFile(null);
     setErrorMsg(null);
     setIsBulkGenerating(false);
     setIsTranslating(false);
@@ -295,6 +314,8 @@ export function useLyricLens() {
     setContentType,
     setVideoPurpose,
     handleFileSelect,
+    startProcessing,
+    pendingFile,
     handleImageGenerated,
     handleGenerateAll,
     handleTranslate,

@@ -40,6 +40,7 @@ export interface GeneratedImage {
 
 export enum AppState {
   IDLE = "IDLE",
+  CONFIGURING = "CONFIGURING",
   PROCESSING_AUDIO = "PROCESSING_AUDIO",
   ANALYZING_LYRICS = "ANALYZING_LYRICS",
   READY = "READY",
@@ -54,3 +55,13 @@ export interface SongData {
   prompts: ImagePrompt[];
   generatedImages: GeneratedImage[];
 }
+
+/**
+ * Transition effects between scenes during video export
+ */
+export type TransitionType =
+  | "none"      // Hard cut
+  | "fade"      // Fade through black
+  | "dissolve"  // Cross-dissolve (blend)
+  | "zoom"      // Zoom into next scene
+  | "slide";    // Slide left/right

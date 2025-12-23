@@ -12,6 +12,7 @@ import {
   testDevelopmentServer, 
   testCSSHotReload 
 } from './testBuildPipeline.js';
+import { testApiClientExports, testWithRetryFunctionality } from './testApiClient.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const testDataDir = path.join(__dirname, '../test_data');
@@ -174,7 +175,9 @@ export const runAllTests = async () => {
     tailwindClassRendering: testTailwindClassRendering(),
     developmentServer: await testDevelopmentServer(),
     cssHotReload: testCSSHotReload(),
-    videoExport: await testVideoExport()
+    videoExport: await testVideoExport(),
+    apiClientExports: await testApiClientExports(),
+    withRetryFunctionality: await testWithRetryFunctionality()
   };
   
   console.log('\n📊 Test Results:');

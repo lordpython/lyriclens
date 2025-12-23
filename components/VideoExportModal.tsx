@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { SongData } from "../types";
+import { SongData, TransitionType } from "../types";
 import {
   Download,
   Film,
@@ -11,6 +11,11 @@ import {
   Video,
   Cloud,
   Laptop,
+  Blend,
+  ZoomIn,
+  ArrowRightLeft,
+  CircleSlash,
+  Sparkles,
 } from "lucide-react";
 import {
   exportVideoWithFFmpeg,
@@ -64,6 +69,8 @@ export const VideoExportModal: React.FC<VideoExportModalProps> = ({
     fadeOutBeforeCut: true,
     wordLevelHighlight: true,
     contentMode: contentMode,
+    transitionType: "dissolve",
+    transitionDuration: 1.5,
   });
   const [isExporting, setIsExporting] = useState(false);
   const [useCloudRender, setUseCloudRender] = useState(false);
@@ -329,7 +336,7 @@ export const VideoExportModal: React.FC<VideoExportModalProps> = ({
                     className={cn(
                       "cursor-pointer transition-all border-border bg-card hover:bg-muted",
                       config.orientation === "landscape" &&
-                        "border-primary bg-primary/10",
+                      "border-primary bg-primary/10",
                     )}
                     onClick={() =>
                       setConfig({ ...config, orientation: "landscape" })
@@ -353,7 +360,7 @@ export const VideoExportModal: React.FC<VideoExportModalProps> = ({
                     className={cn(
                       "cursor-pointer transition-all border-border bg-card hover:bg-muted",
                       config.orientation === "portrait" &&
-                        "border-primary bg-primary/10",
+                      "border-primary bg-primary/10",
                     )}
                     onClick={() =>
                       setConfig({ ...config, orientation: "portrait" })
@@ -394,6 +401,34 @@ export const VideoExportModal: React.FC<VideoExportModalProps> = ({
                   }
                   className="data-[state=checked]:bg-primary"
                 />
+              </div>
+
+              {/* Transition Type */}
+              <div className="space-y-3">
+                <Label className="text-muted-foreground">Scene Transitions</Label>
+                <div className="grid grid-cols-5 gap-2">
+                  {[
+                    { value: "none", label: "Cut", icon: CircleSlash },
+                    { value: "fade", label: "Fade", icon: Sparkles },
+                    { value: "dissolve", label: "Dissolve", icon: Blend },
+                    { value: "zoom", label: "Zoom", icon: ZoomIn },
+                    { value: "slide", label: "Slide", icon: ArrowRightLeft },
+                  ].map(({ value, label, icon: Icon }) => (
+                    <button
+                      key={value}
+                      onClick={() => setConfig({ ...config, transitionType: value as TransitionType })}
+                      className={cn(
+                        "flex flex-col items-center gap-1 p-2 rounded-lg border transition-all text-xs",
+                        config.transitionType === value
+                          ? "border-primary bg-primary/10 text-primary"
+                          : "border-border bg-card text-muted-foreground hover:border-primary/30"
+                      )}
+                    >
+                      <Icon size={16} />
+                      <span>{label}</span>
+                    </button>
+                  ))}
+                </div>
               </div>
 
               <div className="space-y-4 pt-2 border-t border-border/50">

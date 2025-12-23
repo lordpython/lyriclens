@@ -132,50 +132,54 @@ export const TimelinePlayer: React.FC<TimelinePlayerProps> = ({
       return;
     }
 
-    const initAudioContext = () => {
-      if (!audioRef.current) return;
+    // Defer AudioContext initialization to avoid blocking the click handler
+    const timeoutId = setTimeout(() => {
+      const initAudioContext = () => {
+        if (!audioRef.current) return;
 
-      if (!audioContextRef.current) {
-        audioContextRef.current = new (
-          window.AudioContext || (window as any).webkitAudioContext
-        )();
-      }
-
-      const ctx = audioContextRef.current;
-
-      if (!sourceRef.current) {
-        try {
-          sourceRef.current = ctx.createMediaElementSource(audioRef.current);
-          analyserRef.current = ctx.createAnalyser();
-          analyserRef.current.fftSize = visualizerMode === "wave" ? 2048 : 256;
-          analyserRef.current.smoothingTimeConstant = 0.8;
-
-          sourceRef.current.connect(analyserRef.current);
-          analyserRef.current.connect(ctx.destination);
-        } catch (e) {
-          console.warn("AudioContext already connected");
+        if (!audioContextRef.current) {
+          audioContextRef.current = new (
+            window.AudioContext || (window as any).webkitAudioContext
+          )();
         }
-      }
 
-      if (analyserRef.current) {
-        analyserRef.current.fftSize =
-          visualizerMode === "circular"
-            ? 512
-            : visualizerMode === "wave"
-              ? 2048
-              : 256;
-      }
+        const ctx = audioContextRef.current;
 
-      if (ctx.state === "suspended") {
-        ctx.resume();
-      }
+        if (!sourceRef.current) {
+          try {
+            sourceRef.current = ctx.createMediaElementSource(audioRef.current);
+            analyserRef.current = ctx.createAnalyser();
+            analyserRef.current.fftSize = visualizerMode === "wave" ? 2048 : 256;
+            analyserRef.current.smoothingTimeConstant = 0.8;
 
-      startRenderLoop();
-    };
+            sourceRef.current.connect(analyserRef.current);
+            analyserRef.current.connect(ctx.destination);
+          } catch (e) {
+            console.warn("AudioContext already connected");
+          }
+        }
 
-    initAudioContext();
+        if (analyserRef.current) {
+          analyserRef.current.fftSize =
+            visualizerMode === "circular"
+              ? 512
+              : visualizerMode === "wave"
+                ? 2048
+                : 256;
+        }
+
+        if (ctx.state === "suspended") {
+          ctx.resume();
+        }
+
+        startRenderLoop();
+      };
+
+      initAudioContext();
+    }, 0);
 
     return () => {
+      clearTimeout(timeoutId);
       if (animationFrameRef.current) {
         cancelAnimationFrame(animationFrameRef.current);
       }
@@ -630,10 +634,9 @@ export const TimelinePlayer: React.FC<TimelinePlayerProps> = ({
                 <div
                   key={sub.id}
                   className={`absolute bottom-0 h-3 rounded-t-sm transition-all duration-200 pointer-events-none border-x border-background/20
-                    ${
-                      isActive
-                        ? "bg-primary z-10 h-4 shadow-[0_0_15px_rgba(34,211,238,0.6)]"
-                        : "bg-accent hover:bg-accent/80 h-3"
+                    ${isActive
+                      ? "bg-primary z-10 h-4 shadow-[0_0_15px_rgba(34,211,238,0.6)]"
+                      : "bg-accent hover:bg-accent/80 h-3"
                     }
                   `}
                   style={{
@@ -667,6 +670,7 @@ export const TimelinePlayer: React.FC<TimelinePlayerProps> = ({
               size="icon"
               onClick={() => onSeek(0)}
               className="h-9 w-9 text-muted-foreground hover:text-foreground"
+              aria-label="Reset to beginning"
             >
               <RotateCcw size={16} />
             </Button>
@@ -675,6 +679,7 @@ export const TimelinePlayer: React.FC<TimelinePlayerProps> = ({
               size="icon"
               onClick={onPlayPause}
               className="w-14 h-14 rounded-full bg-primary hover:bg-primary/90 text-primary-foreground flex items-center justify-center transition-all active:scale-95 shadow-lg shadow-primary/30 border border-primary/20 p-0"
+              aria-label={isPlaying ? "Pause" : "Play"}
             >
               {isPlaying ? (
                 <Pause size={24} fill="currentColor" />

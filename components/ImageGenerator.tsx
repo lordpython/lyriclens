@@ -12,13 +12,13 @@ import {
   RefreshCw,
   Sparkles,
   Film,
-  ImagePlay,
   ChevronDown,
 } from "lucide-react";
 import {
   generateImageFromPrompt,
   generateVideoFromPrompt,
   refineImagePrompt,
+  generateMotionPrompt,
 } from "../services/geminiService";
 import { animateImageWithDeApi } from "../services/deapiService";
 
@@ -59,27 +59,21 @@ const ASSET_TYPE_OPTIONS: {
   icon: React.ReactNode;
   description: string;
 }[] = [
-  {
-    value: "image",
-    label: "Image",
-    icon: <ImageIcon size={14} />,
-    description: "Generate a still image",
-  },
-  {
-    value: "video",
-    label: "Video",
-    icon: <Film size={14} />,
-    description: "Generate video directly (Veo)",
-  },
-  {
-    value: "video_with_image",
-    label: "Video + Image",
-    icon: <ImagePlay size={14} />,
-    description: "Generate image, then animate",
-  },
-];
+    {
+      value: "image",
+      label: "Image",
+      icon: <ImageIcon size={14} />,
+      description: "Static scene",
+    },
+    {
+      value: "video_with_image", // Use video_with_image internally for better quality
+      label: "Video",
+      icon: <Film size={14} />,
+      description: "Animated clip",
+    },
+  ];
 
-export const ImageGenerator: React.FC<ImageGeneratorProps> = ({
+export const ImageGenerator = React.memo<ImageGeneratorProps>(({
   prompt,
   onImageGenerated,
   existingImage,
@@ -96,8 +90,9 @@ export const ImageGenerator: React.FC<ImageGeneratorProps> = ({
   // Determine initial asset type from prompt or global setting
   const getInitialAssetType = (): AssetType => {
     if (prompt.assetType) return prompt.assetType;
+    // For video mode, always use video_with_image (image → animate) for best quality
     if (generationMode === "video") {
-      return videoProvider === "deapi" ? "video_with_image" : "video";
+      return "video_with_image";
     }
     return "image";
   };
@@ -143,8 +138,8 @@ export const ImageGenerator: React.FC<ImageGeneratorProps> = ({
         );
         resultType = "video";
       } else if (assetType === "video_with_image") {
-        // Two-step: Image first, then animate
-        setGenerationProgress("Step 1/2: Generating base image...");
+        // Three-step: Image first, generate motion prompt, then animate
+        setGenerationProgress("Step 1/3: Generating base image...");
 
         // Check if we already have a base image to reuse
         let sourceImage =
@@ -161,12 +156,20 @@ export const ImageGenerator: React.FC<ImageGeneratorProps> = ({
         }
         baseImageUrl = sourceImage;
 
-        // Animate the image using DeAPI
-        setGenerationProgress("Step 2/2: Animating image...");
+        // Generate motion-optimized prompt
+        setGenerationProgress("Step 2/3: Creating motion prompt...");
+        const motionPrompt = await generateMotionPrompt(
+          currentPromptText,
+          prompt.mood || "cinematic",
+          globalSubject,
+        );
+
+        // Animate the image using DeAPI with motion-focused prompt
+        setGenerationProgress("Step 3/3: Animating image...");
 
         resultBase64 = await animateImageWithDeApi(
           sourceImage,
-          currentPromptText,
+          motionPrompt,
           aspectRatio as "16:9" | "9:16" | "1:1",
         );
         resultType = "video";
@@ -231,27 +234,12 @@ export const ImageGenerator: React.FC<ImageGeneratorProps> = ({
   )!;
 
   const getGenerateButtonLabel = () => {
-    if (loading) {
-      return generationProgress || "Generating...";
-    }
-    switch (assetType) {
-      case "video":
-        return "Generate Video";
-      case "video_with_image":
-        return "Generate Video + Image";
-      default:
-        return "Generate Image";
-    }
+    if (loading) return generationProgress || "Generating...";
+    return assetType === "image" ? "Generate Image" : "Generate Video";
   };
 
   const getRegenerateButtonLabel = () => {
-    switch (assetType) {
-      case "video":
-      case "video_with_image":
-        return "Regenerate Video";
-      default:
-        return "Regenerate Image";
-    }
+    return assetType === "image" ? "Regenerate" : "Regenerate";
   };
 
   return (
@@ -523,4 +511,4 @@ export const ImageGenerator: React.FC<ImageGeneratorProps> = ({
       </Card>
     </motion.div>
   );
-};
+});
