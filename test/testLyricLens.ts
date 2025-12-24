@@ -13,9 +13,12 @@ import {
   testCSSHotReload 
 } from './testBuildPipeline.js';
 import { testApiClientExports, testWithRetryFunctionality } from './testApiClient.js';
+import { testLangChainDependencies, testLangChainImports } from './testDependencies.js';
+import { runHookIntegrationTests } from './testHookIntegration.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const testDataDir = path.join(__dirname, '../test_data');
+
 
 // Convert file to data URL for browser compatibility
 const fileToDataURL = (filePath: string, mimeType: string): string => {
@@ -177,7 +180,18 @@ export const runAllTests = async () => {
     cssHotReload: testCSSHotReload(),
     videoExport: await testVideoExport(),
     apiClientExports: await testApiClientExports(),
-    withRetryFunctionality: await testWithRetryFunctionality()
+    withRetryFunctionality: await testWithRetryFunctionality(),
+    langChainDependencies: testLangChainDependencies(),
+    langChainImports: await testLangChainImports(),
+    hookIntegration: await (async () => {
+      try {
+        const hookResults = await runHookIntegrationTests();
+        return Object.values(hookResults).every(Boolean);
+      } catch (error) {
+        console.error('❌ Hook integration tests failed:', error);
+        return false;
+      }
+    })()
   };
   
   console.log('\n📊 Test Results:');

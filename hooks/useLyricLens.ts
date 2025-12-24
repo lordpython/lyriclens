@@ -2,8 +2,6 @@ import { useState } from "react";
 import { AppState, SongData, GeneratedImage, AssetType } from "../types";
 import {
   transcribeAudioWithWordTiming,
-  generatePromptsFromLyrics,
-  generatePromptsFromStory,
   fileToGenerativePart,
   generateImageFromPrompt,
   generateVideoFromPrompt,
@@ -12,6 +10,7 @@ import {
   generateMotionPrompt,
   VideoPurpose,
 } from "../services/geminiService";
+import { generatePromptsWithLangChain } from "../services/directorService";
 import { animateImageWithDeApi } from "../services/deapiService";
 import { subtitlesToSRT } from "../utils/srtParser";
 
@@ -76,23 +75,16 @@ export function useLyricLens() {
 
       setAppState(AppState.ANALYZING_LYRICS);
 
-      // 4. Generate Prompts based on Content Type (now with global subject & purpose)
-      let prompts;
-      if (contentType === "story") {
-        prompts = await generatePromptsFromStory(
-          srt,
-          selectedStyle,
-          globalSubject,
-          videoPurpose,
-        );
-      } else {
-        prompts = await generatePromptsFromLyrics(
-          srt,
-          selectedStyle,
-          globalSubject,
-          videoPurpose,
-        );
-      }
+      // 4. Generate Prompts using LangChain Director workflow
+      // The generatePromptsWithLangChain function handles both lyrics and story content types
+      // and automatically falls back to the original implementation on errors
+      const prompts = await generatePromptsWithLangChain(
+        srt,
+        selectedStyle,
+        contentType === "story" ? "story" : "lyrics",
+        videoPurpose,
+        globalSubject,
+      );
 
       partialData.prompts = prompts;
       setSongData({ ...partialData });
