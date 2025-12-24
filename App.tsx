@@ -24,6 +24,8 @@ export default function App() {
     setGenerationMode,
     videoProvider,
     setVideoProvider,
+    directorMode,
+    setDirectorMode,
     setAspectRatio,
     setGlobalSubject,
     setContentType,
@@ -169,6 +171,8 @@ export default function App() {
           setAspectRatio={setAspectRatio}
           setGenerationMode={setGenerationMode}
           setVideoProvider={setVideoProvider}
+          directorMode={directorMode}
+          setDirectorMode={setDirectorMode}
           setGlobalSubject={setGlobalSubject}
           setSelectedStyle={setSelectedStyle}
         />

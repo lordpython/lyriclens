@@ -6,6 +6,8 @@ import {
     Video,
     Monitor,
     Smartphone,
+    Zap,
+    Brain,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -33,6 +35,8 @@ interface ConfigurationWizardProps {
     setGenerationMode: (val: "image" | "video") => void;
     videoProvider: "veo" | "deapi";
     setVideoProvider: (val: "veo" | "deapi") => void;
+    directorMode: "chain" | "agent";
+    setDirectorMode: (val: "chain" | "agent") => void;
     globalSubject: string;
     setGlobalSubject: (val: string) => void;
     selectedStyle: string;
@@ -50,6 +54,8 @@ export const ConfigurationWizard: React.FC<ConfigurationWizardProps> = ({
     generationMode,
     setGenerationMode,
     setVideoProvider,
+    directorMode,
+    setDirectorMode,
     globalSubject,
     setGlobalSubject,
     selectedStyle,
@@ -176,6 +182,40 @@ export const ConfigurationWizard: React.FC<ConfigurationWizardProps> = ({
                             placeholder="e.g. A girl with red hair, a robot"
                             className="h-12 bg-background/50"
                         />
+                    </div>
+
+                    {/* Row 5: Director Mode */}
+                    <div className="space-y-3">
+                        <label className="text-sm font-medium text-muted-foreground">AI Director Mode</label>
+                        <div className="grid grid-cols-2 gap-3">
+                            <button
+                                onClick={() => setDirectorMode("chain")}
+                                className={cn(
+                                    "p-3 rounded-xl border-2 transition-all flex flex-col items-center gap-1",
+                                    directorMode === "chain"
+                                        ? "border-amber-500 bg-amber-500/10 text-amber-400"
+                                        : "border-border/50 hover:border-amber-500/30"
+                                )}
+                            >
+                                <Zap size={20} />
+                                <span className="font-medium text-sm">Fast</span>
+                                <span className="text-xs text-muted-foreground">Fixed pipeline</span>
+                            </button>
+
+                            <button
+                                onClick={() => setDirectorMode("agent")}
+                                className={cn(
+                                    "p-3 rounded-xl border-2 transition-all flex flex-col items-center gap-1",
+                                    directorMode === "agent"
+                                        ? "border-purple-500 bg-purple-500/10 text-purple-400"
+                                        : "border-border/50 hover:border-purple-500/30"
+                                )}
+                            >
+                                <Brain size={20} />
+                                <span className="font-medium text-sm">Smart</span>
+                                <span className="text-xs text-muted-foreground">Self-improving</span>
+                            </button>
+                        </div>
                     </div>
                 </div>
 

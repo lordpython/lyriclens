@@ -68,6 +68,8 @@ export interface MainContentProps {
   setAspectRatio: (ratio: string) => void;
   setGenerationMode: (mode: "image" | "video") => void;
   setVideoProvider: (provider: "veo" | "deapi") => void;
+  directorMode: "chain" | "agent";
+  setDirectorMode: (mode: "chain" | "agent") => void;
   setGlobalSubject: (subject: string) => void;
   setSelectedStyle: (style: string) => void;
 }
@@ -110,6 +112,8 @@ export const MainContent: React.FC<MainContentProps> = ({
   setAspectRatio,
   setGenerationMode,
   setVideoProvider,
+  directorMode,
+  setDirectorMode,
   setGlobalSubject,
   setSelectedStyle,
 }) => {
@@ -273,6 +277,8 @@ export const MainContent: React.FC<MainContentProps> = ({
               setGenerationMode={setGenerationMode}
               videoProvider={videoProvider}
               setVideoProvider={setVideoProvider}
+              directorMode={directorMode}
+              setDirectorMode={setDirectorMode}
               globalSubject={globalSubject}
               setGlobalSubject={setGlobalSubject}
               selectedStyle={selectedStyle}

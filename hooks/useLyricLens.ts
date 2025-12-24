@@ -11,6 +11,7 @@ import {
   VideoPurpose,
 } from "../services/geminiService";
 import { generatePromptsWithLangChain } from "../services/directorService";
+import { generatePromptsWithAgent } from "../services/agentDirectorService";
 import { animateImageWithDeApi } from "../services/deapiService";
 import { subtitlesToSRT } from "../utils/srtParser";
 
@@ -27,6 +28,7 @@ export function useLyricLens() {
     "image",
   );
   const [videoProvider, setVideoProvider] = useState<"veo" | "deapi">("veo");
+  const [directorMode, setDirectorMode] = useState<"chain" | "agent">("chain");
   const [pendingFile, setPendingFile] = useState<File | null>(null);
 
   // Translation State
@@ -75,16 +77,29 @@ export function useLyricLens() {
 
       setAppState(AppState.ANALYZING_LYRICS);
 
-      // 4. Generate Prompts using LangChain Director workflow
-      // The generatePromptsWithLangChain function handles both lyrics and story content types
-      // and automatically falls back to the original implementation on errors
-      const prompts = await generatePromptsWithLangChain(
-        srt,
-        selectedStyle,
-        contentType === "story" ? "story" : "lyrics",
-        videoPurpose,
-        globalSubject,
-      );
+      // 4. Generate Prompts using selected Director mode
+      // "chain" = LangChain LCEL pipeline (faster, deterministic)
+      // "agent" = LangChain Agent with tools (smarter, self-improving)
+      let prompts;
+      if (directorMode === "agent") {
+        console.log("[useLyricLens] Using Agent Director mode");
+        prompts = await generatePromptsWithAgent(
+          srt,
+          selectedStyle,
+          contentType === "story" ? "story" : "lyrics",
+          videoPurpose,
+          globalSubject,
+        );
+      } else {
+        console.log("[useLyricLens] Using Chain Director mode");
+        prompts = await generatePromptsWithLangChain(
+          srt,
+          selectedStyle,
+          contentType === "story" ? "story" : "lyrics",
+          videoPurpose,
+          globalSubject,
+        );
+      }
 
       partialData.prompts = prompts;
       setSongData({ ...partialData });
@@ -301,6 +316,8 @@ export function useLyricLens() {
     setGenerationMode,
     videoProvider,
     setVideoProvider,
+    directorMode,
+    setDirectorMode,
     setAspectRatio,
     setGlobalSubject,
     setContentType,

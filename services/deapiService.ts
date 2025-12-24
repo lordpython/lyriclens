@@ -1,5 +1,3 @@
-import { Type } from "@google/genai";
-
 const API_BASE = "https://api.deapi.ai/api/v1/client";
 const DEFAULT_MODEL = "Ltxv_13B_0_9_8_Distilled_FP8";
 
@@ -152,7 +150,7 @@ export const animateImageWithDeApi = async (
   formData.append("height", height.toString());
   formData.append("guidance", "7.5"); // Standard guidance scale
   formData.append("steps", "1"); // Distilled model (Ltxv_13B_0_9_8_Distilled_FP8) requires max 1 step
-  formData.append("frames", "30"); // Minimum required by DeAPI is 30
+  formData.append("frames", "120"); // Minimum required by DeAPI is 30
   formData.append("fps", "30"); // Default FPS as per DeAPI docs
   formData.append("model", DEFAULT_MODEL);
   formData.append("seed", "-1"); // Use -1 for random seed as per API docs
