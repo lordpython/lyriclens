@@ -182,7 +182,7 @@ In conclusion, we must act now to protect our future.`;
       storyContent,
       'documentary',
       'story',
-      'educational'
+      'documentary'
     );
     
     // Should return an array

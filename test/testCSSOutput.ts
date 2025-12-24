@@ -25,9 +25,8 @@ const analyzeCSSContent = (cssContent: string, buildType: 'dev' | 'prod'): CSSAn
     hasTailwindClasses: cssContent.includes('tailwindcss') || 
                         cssContent.includes('flex') || 
                         cssContent.includes('grid'),
-    hasCustomStyles: cssContent.includes('fadeIn') && 
-                     cssContent.includes('slideInFromBottom') &&
-                     cssContent.includes('line-clamp-3'),
+    hasCustomStyles: cssContent.includes('glass') && 
+                     cssContent.includes('animate-fade-in'),
     hasUtilities: (cssContent.includes('flex') || cssContent.includes('.flex')) &&
                   (cssContent.includes('grid') || cssContent.includes('.grid')) &&
                   cssContent.includes('transition'),
