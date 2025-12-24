@@ -19,14 +19,15 @@ import { tool } from "@langchain/core/tools";
 import { z } from "zod";
 import { ImagePrompt } from "../types";
 import { VideoPurpose, CAMERA_ANGLES, LIGHTING_MOODS } from "../constants";
-import { 
-  lintPrompt, 
-  getPurposeGuidance, 
+import {
+  lintPrompt,
+  getPurposeGuidance,
+  getSystemPersona,
   refineImagePrompt,
-  type PromptLintIssue 
+  type PromptLintIssue
 } from "./promptService";
 import { parseSRTTimestamp } from "../utils/srtParser";
-import { 
+import {
   type AnalysisOutput,
   type StoryboardOutput,
   runAnalyzer,
@@ -82,14 +83,14 @@ const searchVisualReferencesTool = tool(
  * Tool: Generate Storyboard
  */
 const generateStoryboardTool = tool(
-  async ({ 
-    analysisJson, 
-    style, 
-    videoPurpose, 
-    globalSubject 
-  }: { 
-    analysisJson: string; 
-    style: string; 
+  async ({
+    analysisJson,
+    style,
+    videoPurpose,
+    globalSubject
+  }: {
+    analysisJson: string;
+    style: string;
     videoPurpose: string;
     globalSubject: string;
   }) => {
@@ -97,14 +98,38 @@ const generateStoryboardTool = tool(
       console.log("[AgentDirector] Generating storyboard...");
       const analysis: AnalysisOutput = JSON.parse(analysisJson);
       const storyboard = await runStoryboarder(
-        analysis, 
-        style, 
+        analysis,
+        style,
         videoPurpose as VideoPurpose,
         globalSubject
       );
+      
+      // Validate the storyboard structure
+      if (!storyboard || !storyboard.prompts || !Array.isArray(storyboard.prompts)) {
+        throw new Error("Invalid storyboard structure: missing prompts array");
+      }
+      
+      if (storyboard.prompts.length === 0) {
+        throw new Error("Storyboard contains no prompts");
+      }
+      
+      // Validate each prompt has required fields
+      for (let i = 0; i < storyboard.prompts.length; i++) {
+        const prompt = storyboard.prompts[i];
+        if (!prompt.text || typeof prompt.text !== 'string') {
+          throw new Error(`Prompt ${i} missing or invalid text field`);
+        }
+        if (!prompt.timestamp || typeof prompt.timestamp !== 'string') {
+          throw new Error(`Prompt ${i} missing or invalid timestamp field`);
+        }
+      }
+      
+      console.log(`[AgentDirector] Storyboard validated: ${storyboard.prompts.length} prompts`);
       return JSON.stringify(storyboard, null, 2);
     } catch (error) {
-      return `Storyboard generation failed: ${error instanceof Error ? error.message : String(error)}`;
+      const errorMsg = `Storyboard generation failed: ${error instanceof Error ? error.message : String(error)}`;
+      console.error("[AgentDirector]", errorMsg);
+      return errorMsg;
     }
   },
   {
@@ -124,13 +149,13 @@ Use this AFTER analyzing content.`,
  * Tool: Refine Prompt
  */
 const refinePromptTool = tool(
-  async ({ 
-    promptText, 
-    style, 
+  async ({
+    promptText,
+    style,
     globalSubject,
-    previousPrompts 
-  }: { 
-    promptText: string; 
+    previousPrompts
+  }: {
+    promptText: string;
     style: string;
     globalSubject: string;
     previousPrompts: string[];
@@ -169,10 +194,10 @@ const refinePromptTool = tool(
  * Tool: Critique Storyboard
  */
 const critiqueStoryboardTool = tool(
-  async ({ 
-    storyboardJson, 
-    globalSubject 
-  }: { 
+  async ({
+    storyboardJson,
+    globalSubject
+  }: {
     storyboardJson: string;
     globalSubject: string;
   }) => {
@@ -215,7 +240,7 @@ function getVisualReferences(query: string, style: string): {
   colorPalette: string[];
 } {
   const queryLower = query.toLowerCase();
-  
+
   const moodSuggestions: Record<string, { camera: string[]; lighting: string[]; colors: string[] }> = {
     melancholic: {
       camera: ["slow dolly out", "static wide shot", "low angle looking up"],
@@ -287,7 +312,7 @@ function critiqueStoryboard(
   let totalScore = 100;
 
   const prompts = storyboard.prompts || [];
-  
+
   if (prompts.length < 8) {
     issues.push({ promptIndex: -1, code: "too_few_prompts", message: `Only ${prompts.length} prompts` });
     totalScore -= 15;
@@ -297,7 +322,7 @@ function critiqueStoryboard(
 
   const previousPrompts: string[] = [];
   const moods = new Set<string>();
-  
+
   prompts.forEach((prompt, index) => {
     const lintIssues = lintPrompt({
       promptText: prompt.text,
@@ -323,7 +348,7 @@ function critiqueStoryboard(
 
   const recommendations: string[] = [];
   const errorPrompts = issues.filter(i => i.promptIndex >= 0);
-  
+
   if (errorPrompts.length > 0) {
     const uniqueIndices = [...new Set(errorPrompts.map(i => i.promptIndex))];
     recommendations.push(`Refine prompts at indices: ${uniqueIndices.join(", ")}`);
@@ -355,12 +380,34 @@ const DEFAULT_AGENT_CONFIG: Required<AgentDirectorConfig> = {
   qualityThreshold: 70,
 };
 
-const DIRECTOR_SYSTEM_PROMPT = `You are an expert music video director. Create compelling visual storyboards.
+/**
+ * Enable verbose mode for LangChain debugging.
+ * Set to true to see detailed chain execution logs.
+ */
+const LANGCHAIN_VERBOSE = true;
+
+/**
+ * Generates a dynamic system prompt based on video purpose.
+ * Each purpose gets a specialized persona with specific rules.
+ */
+function getAgentSystemPrompt(purpose: VideoPurpose): string {
+  const persona = getSystemPersona(purpose);
+
+  return `You are ${persona.name}, an expert ${persona.role}. Create compelling visual storyboards.
+
+## Your Identity & Core Rule
+${persona.coreRule}
+
+## Your Visual Principles
+${persona.visualPrinciples.map(p => `- ${p}`).join('\n')}
+
+## What to AVOID
+${persona.avoidList.map(a => `- ${a}`).join('\n')}
 
 ## Workflow
-1. ANALYZE content using analyze_content tool
+1. ANALYZE content using analyze_content tool - HUNT FOR CONCRETE OBJECTS
 2. SEARCH for visual references if needed
-3. GENERATE storyboard using generate_storyboard with the analysis
+3. GENERATE storyboard - ensure concrete objects appear LITERALLY
 4. CRITIQUE your work using critique_storyboard
 5. REFINE weak prompts if score < threshold
 
@@ -370,8 +417,15 @@ const DIRECTOR_SYSTEM_PROMPT = `You are an expert music video director. Create c
 - NO text, logos, or watermarks
 - Vary camera angles across scenes
 - Match visual intensity to emotional intensity
+- CRITICAL: If lyrics mention an object (candle, door, rain), show that ACTUAL object
+
+## Anti-Patterns to Reject
+- NO "couple arguing" scenes - use glass breaking or door closing instead
+- NO "sad person" when lyrics say "candle" - show the actual candle
+- NO generic interpretations of specific imagery
 
 When done, output the final storyboard JSON.`;
+}
 
 // --- Tool Execution Helper ---
 
@@ -379,7 +433,7 @@ async function executeToolCall(
   toolCall: { name: string; args: Record<string, unknown> }
 ): Promise<string> {
   const { name, args } = toolCall;
-  
+
   // Sanitize args to handle null values
   const sanitizedArgs = { ...args };
   for (const [key, value] of Object.entries(sanitizedArgs)) {
@@ -387,7 +441,7 @@ async function executeToolCall(
       sanitizedArgs[key] = '';
     }
   }
-  
+
   switch (name) {
     case "analyze_content":
       return analyzeContentTool.invoke(sanitizedArgs as { content: string; contentType: "lyrics" | "story" });
@@ -416,7 +470,7 @@ export async function generatePromptsWithAgent(
 ): Promise<ImagePrompt[]> {
   const startTime = Date.now();
   const mergedConfig = { ...DEFAULT_AGENT_CONFIG, ...config };
-  
+
   console.log("[AgentDirector] Starting agent workflow...");
 
   if (!srtContent || srtContent.trim().length === 0) {
@@ -424,10 +478,10 @@ export async function generatePromptsWithAgent(
     return [];
   }
 
-  const apiKey = process.env.GEMINI_API_KEY || 
-                 process.env.VITE_GEMINI_API_KEY || 
-                 process.env.API_KEY || 
-                 "";
+  const apiKey = process.env.GEMINI_API_KEY ||
+    process.env.VITE_GEMINI_API_KEY ||
+    process.env.API_KEY ||
+    "";
 
   if (!apiKey) {
     console.error("[AgentDirector] No API key found");
@@ -435,14 +489,16 @@ export async function generatePromptsWithAgent(
   }
 
   try {
-    // Create model with tools bound
+    // Create model with tools bound (verbose mode enabled)
     const model = new ChatGoogleGenerativeAI({
       model: mergedConfig.model,
       temperature: mergedConfig.temperature,
       apiKey,
+      verbose: LANGCHAIN_VERBOSE,
     }).bindTools(allTools);
 
-    // Initial message
+    // Initial message with persona-driven system prompt
+    const systemPrompt = getAgentSystemPrompt(videoPurpose);
     const taskMessage = `Create a visual storyboard for this ${contentType} content.
 
 Style: ${style}
@@ -456,10 +512,11 @@ ${srtContent}
 Follow workflow: analyze → generate → critique → refine if needed.`;
 
     const messages: (HumanMessage | AIMessage | ToolMessage)[] = [
-      new HumanMessage(DIRECTOR_SYSTEM_PROMPT + "\n\n" + taskMessage),
+      new HumanMessage(systemPrompt + "\n\n" + taskMessage),
     ];
 
     let finalStoryboard: StoryboardOutput | null = null;
+    let lastCritiqueScore = 0;
     let iterations = 0;
     const maxIterations = mergedConfig.maxIterations + 3; // Allow for tool calls
 
@@ -473,11 +530,33 @@ Follow workflow: analyze → generate → critique → refine if needed.`;
 
       // Check for tool calls
       const toolCalls = response.tool_calls || [];
-      
+
       if (toolCalls.length === 0) {
-        // No more tool calls - try to extract final result
-        console.log("[AgentDirector] No tool calls, extracting result...");
-        finalStoryboard = extractStoryboardFromContent(response.content as string);
+        // No more tool calls - check if we have a valid storyboard
+        console.log("[AgentDirector] No tool calls, checking final storyboard...");
+        
+        // Try to extract from response content first
+        const extractedStoryboard = extractStoryboardFromContent(response.content as string);
+        if (extractedStoryboard) {
+          finalStoryboard = extractedStoryboard;
+        }
+        
+        // If we have a storyboard and it meets quality threshold, we're done
+        if (finalStoryboard && lastCritiqueScore >= mergedConfig.qualityThreshold) {
+          console.log(`[AgentDirector] Storyboard meets quality threshold (${lastCritiqueScore})`);
+          break;
+        }
+        
+        // If we have a storyboard but no critique score, accept it anyway
+        if (finalStoryboard && lastCritiqueScore === 0) {
+          console.log("[AgentDirector] Storyboard found without critique, accepting");
+          break;
+        }
+        
+        // If no storyboard found, break anyway to avoid infinite loop
+        if (!finalStoryboard) {
+          console.warn("[AgentDirector] No storyboard found in final response");
+        }
         break;
       }
 
@@ -497,9 +576,24 @@ Follow workflow: analyze → generate → critique → refine if needed.`;
         // Track storyboard results
         if (toolCall.name === "generate_storyboard") {
           try {
-            finalStoryboard = JSON.parse(result);
-          } catch {
-            // Will try to extract later
+            const storyboard = JSON.parse(result);
+            if (storyboard.prompts && storyboard.prompts.length > 0) {
+              finalStoryboard = storyboard;
+              console.log(`[AgentDirector] Storyboard captured: ${storyboard.prompts.length} prompts`);
+            }
+          } catch (error) {
+            console.warn("[AgentDirector] Failed to parse storyboard result:", error);
+          }
+        }
+
+        // Track critique scores
+        if (toolCall.name === "critique_storyboard") {
+          try {
+            const critique = JSON.parse(result);
+            lastCritiqueScore = critique.overallScore || 0;
+            console.log(`[AgentDirector] Critique score: ${lastCritiqueScore}`);
+          } catch (error) {
+            console.warn("[AgentDirector] Failed to parse critique result:", error);
           }
         }
       }
@@ -513,7 +607,19 @@ Follow workflow: analyze → generate → critique → refine if needed.`;
       return prompts;
     }
 
-    console.warn("[AgentDirector] No storyboard generated");
+    // Enhanced debugging for failed cases
+    console.error("[AgentDirector] No storyboard generated");
+    console.error("[AgentDirector] Final storyboard:", finalStoryboard);
+    console.error("[AgentDirector] Last critique score:", lastCritiqueScore);
+    console.error("[AgentDirector] Iterations completed:", iterations);
+    
+    // Log the last few messages for debugging
+    const lastMessages = messages.slice(-3);
+    console.error("[AgentDirector] Last messages:", lastMessages.map(m => ({
+      type: m.constructor.name,
+      content: typeof m.content === 'string' ? m.content.substring(0, 200) : m.content
+    })));
+
     return [];
 
   } catch (error) {
@@ -523,14 +629,36 @@ Follow workflow: analyze → generate → critique → refine if needed.`;
 }
 
 function extractStoryboardFromContent(content: string): StoryboardOutput | null {
-  const jsonMatch = content.match(/\{[\s\S]*"prompts"[\s\S]*\}/);
-  if (jsonMatch) {
-    try {
-      return JSON.parse(jsonMatch[0]);
-    } catch {
-      return null;
+  if (!content || typeof content !== 'string') {
+    return null;
+  }
+
+  // Try multiple patterns to find JSON content
+  const patterns = [
+    /\{[\s\S]*"prompts"[\s\S]*\}/,  // Original pattern
+    /```json\s*(\{[\s\S]*?\})\s*```/,  // JSON in code blocks
+    /(\{[\s\S]*?\})/,  // Any JSON-like structure
+  ];
+
+  for (const pattern of patterns) {
+    const match = content.match(pattern);
+    if (match) {
+      const jsonStr = match[1] || match[0];
+      try {
+        const parsed = JSON.parse(jsonStr);
+        // Validate it has the expected structure
+        if (parsed && parsed.prompts && Array.isArray(parsed.prompts)) {
+          console.log(`[AgentDirector] Extracted storyboard with ${parsed.prompts.length} prompts`);
+          return parsed;
+        }
+      } catch (error) {
+        console.warn("[AgentDirector] Failed to parse extracted JSON:", error);
+        continue;
+      }
     }
   }
+
+  console.warn("[AgentDirector] No valid storyboard JSON found in content");
   return null;
 }
 
@@ -552,3 +680,6 @@ export const agentTools = {
   refinePromptTool,
   critiqueStoryboardTool,
 };
+
+// Export helper functions for testing
+export { extractStoryboardFromContent, convertToImagePrompts };

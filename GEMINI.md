@@ -12,12 +12,19 @@ LyricLens is an AI-powered application that turns audio tracks—including music
 
 ### Core Features
 *   **Director Mode:** A sophisticated LangChain-based agent system (Analyzer & Storyboarder) that analyzes content structure (emotional arc, sections) to generate cohesive, cinematically paced visual storyboards.
+*   **Dynamic Persona System:** AI adapts its behavior based on video purpose:
+    *   **Brand Specialist** (Commercial): Product-focused, clean lighting, no metaphors
+    *   **Visual Poet** (Music Video): Metaphor literalism - shows actual objects mentioned in lyrics
+    *   **Historian** (Documentary): Realism and accuracy focused
+    *   **Viral Creator** (Social Short): Scroll-stopping visual hooks
+*   **Concrete Motif Extraction:** The "Candle Fix" - when lyrics mention physical objects (candle, door, rain), the AI is forced to show these objects literally, not as abstract interpretations.
 *   **Dual Modes:** Support for "Music Video" (Verse/Chorus analysis) and "Story / Speech" (Narrative/Segment analysis).
 *   **Video Generation:** Create animated videos using **Google Veo** or **DeAPI** (img2video).
 *   **Translation:** Built-in subtitle translation to reach global audiences.
 *   **Intent-Based Prompts:** 13+ specialized visual styles including "Commercial/Ad", "Manga", "Tutorial", and "Cinematic".
+*   **Style Enhancement:** Art medium-specific keywords (watercolor: "bleeding edges", "wet-on-wet technique"; oil: "impasto brushwork", "canvas weave").
 *   **Subject Consistency:** "Global Subject" input ensures character/object consistency across generated scenes.
-*   **Advanced Prompt Engineering:** Automated linting, refinement, and motion prompt generation to ensure high-quality outputs.
+*   **Advanced Prompt Engineering:** Automated linting, refinement, conflict detection, and motion prompt generation.
 *   **Cross-Platform:** Runs on Web (Desktop/Mobile) and Native Mobile (Android/iOS).
 
 ## Architecture
@@ -25,8 +32,9 @@ LyricLens is an AI-powered application that turns audio tracks—including music
 The project uses a **hybrid architecture** combining client-side interactivity with powerful server-side and cloud-based processing:
 
 1.  **AI Orchestration (Director Service):**
-    *   **Analyzer Agent:** Analyzes lyrics/transcript to determine emotional intensity, themes, and structure (Verse/Chorus/Bridge).
-    *   **Storyboarder Agent:** Generates detailed visual prompts mapped to the analysis.
+    *   **Persona System:** `getSystemPersona(purpose)` returns purpose-specific AI behavior rules.
+    *   **Analyzer Agent:** Analyzes lyrics/transcript to determine emotional intensity, themes, structure, and **concrete motifs** (physical objects to visualize).
+    *   **Storyboarder Agent:** Generates detailed visual prompts mapped to the analysis, enforcing motif literalism.
     *   Uses **Zod** schemas for strictly typed AI outputs.
 
 2.  **Rendering Pipeline:**

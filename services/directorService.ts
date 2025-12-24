@@ -12,7 +12,7 @@ import { RunnableSequence } from "@langchain/core/runnables";
 import { z } from "zod";
 import { ImagePrompt } from "../types";
 import { VideoPurpose, CAMERA_ANGLES, LIGHTING_MOODS } from "../constants";
-import { lintPrompt, getPurposeGuidance, generatePromptsFromLyrics, generatePromptsFromStory, refineImagePrompt } from "./promptService";
+import { lintPrompt, getPurposeGuidance, getSystemPersona, getStyleEnhancement, generatePromptsFromLyrics, generatePromptsFromStory, refineImagePrompt } from "./promptService";
 import { parseSRTTimestamp } from "../utils/srtParser";
 
 // --- Zod Schemas ---
@@ -36,6 +36,12 @@ export const AnalysisSchema = z.object({
   }),
   themes: z.array(z.string()).describe("Key visual themes extracted from content"),
   motifs: z.array(z.string()).describe("Recurring visual motifs to maintain consistency"),
+  // NEW: Concrete motifs for literal visualization (the "candle" fix)
+  concreteMotifs: z.array(z.object({
+    object: z.string().describe("Physical object mentioned (e.g., 'candle', 'door', 'rain', 'mirror')"),
+    timestamp: z.string().describe("When it first appears (MM:SS format)"),
+    emotionalContext: z.string().describe("What emotion/meaning it represents"),
+  })).describe("CRITICAL: Concrete physical objects from the text that MUST appear LITERALLY in visuals"),
 });
 
 export type AnalysisOutput = z.infer<typeof AnalysisSchema>;
@@ -116,6 +122,14 @@ export type DirectorErrorCode =
   | "UNKNOWN_ERROR";
 
 
+// --- LangChain Verbose Configuration ---
+
+/**
+ * Enable verbose mode for LangChain debugging.
+ * Set to true to see detailed chain execution logs.
+ */
+const LANGCHAIN_VERBOSE = true;
+
 // --- Model Initialization ---
 
 /**
@@ -123,17 +137,18 @@ export type DirectorErrorCode =
  */
 function createModel(config: DirectorConfig = {}): ChatGoogleGenerativeAI {
   const mergedConfig = { ...DEFAULT_CONFIG, ...config };
-  
+
   // Use the same API key resolution as apiClient.ts
-  const apiKey = process.env.GEMINI_API_KEY || 
-                 process.env.VITE_GEMINI_API_KEY || 
-                 process.env.API_KEY || 
-                 "";
-  
+  const apiKey = process.env.GEMINI_API_KEY ||
+    process.env.VITE_GEMINI_API_KEY ||
+    process.env.API_KEY ||
+    "";
+
   return new ChatGoogleGenerativeAI({
     model: mergedConfig.model,
     temperature: mergedConfig.temperature,
     apiKey,
+    verbose: LANGCHAIN_VERBOSE,
   });
 }
 
@@ -144,7 +159,7 @@ function createModel(config: DirectorConfig = {}): ChatGoogleGenerativeAI {
  * Handles both "lyrics" and "story" content types.
  */
 function createAnalyzerTemplate(contentType: "lyrics" | "story"): ChatPromptTemplate {
-  const contentTypeGuidance = contentType === "lyrics" 
+  const contentTypeGuidance = contentType === "lyrics"
     ? `For song lyrics, identify:
 - Song sections: Intro, Verse, Pre-Chorus, Chorus, Bridge, Outro
 - Emotional intensity per section (1-10 scale)
@@ -160,7 +175,7 @@ function createAnalyzerTemplate(contentType: "lyrics" | "story"): ChatPromptTemp
 
   return ChatPromptTemplate.fromMessages([
     ["system", `You are a professional content analyst specializing in ${contentType} analysis.
-Your task is to analyze the provided content and identify its structure, emotional arc, and key themes.
+Your task is to analyze the provided content and identify its structure, emotional arc, key themes, and CONCRETE VISUAL MOTIFS.
 
 CONTENT TYPE: ${contentType}
 ${contentTypeGuidance}
@@ -172,12 +187,28 @@ ANALYSIS REQUIREMENTS:
 4. Identify 3-6 key visual themes
 5. Identify 2-4 recurring visual motifs for consistency
 
+CONCRETE MOTIF EXTRACTION (CRITICAL - THE "CANDLE FIX"):
+Hunt for EVERY physical object mentioned in the text. These MUST be visualized LITERALLY:
+- Objects: candle, door, window, rain, fire, mirror, clock, rose, stars, moon, ocean, etc.
+- Actions: falling, burning, breaking, opening, closing, fading, melting
+- Settings: beach, city, bedroom, forest, rooftop, highway
+
+For EACH concrete object/action found:
+- Record the exact object name
+- Note when it first appears (timestamp)
+- Describe what emotion it represents
+
+These concrete motifs MUST be passed to the Storyboarder and shown AS LITERAL OBJECTS.
+If lyrics say "the candle flickers", the visual MUST show an actual candle - NOT a "sad person" or "lonely scene".
+The object IS the metaphor. Show the object.
+
 OUTPUT FORMAT:
 Return a valid JSON object (no markdown code blocks) with these fields:
 - "sections": array of objects, each with "name" (string), "startTimestamp" (MM:SS), "endTimestamp" (MM:SS), "type" (lowercase enum), "emotionalIntensity" (1-10)
 - "emotionalArc": object with "opening", "peak", "resolution" strings
 - "themes": array of theme strings (3-6 items)
 - "motifs": array of motif strings (2-4 items)
+- "concreteMotifs": array of objects with "object" (the physical thing), "timestamp" (MM:SS), "emotionalContext" (what it represents)
 
 CRITICAL: The "type" field MUST be one of these exact lowercase values: ${validTypes}
 Do NOT use capitalized values like "Verse" - use lowercase "verse" instead.
@@ -195,7 +226,7 @@ export function createAnalyzerChain(contentType: "lyrics" | "story", config?: Di
   const model = createModel(config);
   const template = createAnalyzerTemplate(contentType);
   const parser = StructuredOutputParser.fromZodSchema(AnalysisSchema);
-  
+
   return template.pipe(model).pipe(parser);
 }
 
@@ -208,11 +239,11 @@ export async function runAnalyzer(
   config?: DirectorConfig
 ): Promise<AnalysisOutput> {
   const chain = createAnalyzerChain(contentType, config);
-  
+
   const result = await chain.invoke({
     content,
   });
-  
+
   return result;
 }
 
@@ -221,17 +252,31 @@ export async function runAnalyzer(
 
 /**
  * Creates the Storyboarder prompt template.
- * Generates detailed visual prompts based on the Analyzer's output.
+ * Generates detailed visual prompts based on the Analyzer's output and persona rules.
  */
 function createStoryboarderTemplate(): ChatPromptTemplate {
   return ChatPromptTemplate.fromMessages([
-    ["system", `You are a professional music video director creating an image storyboard.
+    ["system", `{personaInstructions}
 
 ART STYLE: {style}
+{styleEnhancement}
+
 {purposeGuidance}
 
 GLOBAL SUBJECT: {globalSubject}
 {subjectGuidance}
+
+CONCRETE MOTIFS (MUST INCLUDE LITERALLY):
+{concreteMotifs}
+
+CRITICAL RULE - METAPHOR LITERALISM:
+For each concrete motif listed above, you MUST show the actual physical object.
+- If lyrics say "candle" → show a real candle
+- If lyrics say "door closing" → show a door physically closing
+- If lyrics say "rain" → show actual rain falling
+Do NOT replace concrete objects with abstract interpretations.
+Do NOT show "sad person" when lyrics mention "candle".
+The object IS the metaphor. Show the object itself.
 
 AVAILABLE CAMERA ANGLES: {cameraAngles}
 AVAILABLE LIGHTING MOODS: {lightingMoods}
@@ -249,6 +294,12 @@ PROMPT WRITING RULES:
 7. Include sensory details: textures, materials, weather, time of day
 8. NEVER repeat the same camera angle in consecutive scenes
 9. Match visual intensity to emotional intensity from analysis
+10. INCLUDE at least one concrete motif from the list in each relevant scene
+
+AVOID GENERIC CONFLICT TROPES:
+- NO "couple arguing" or "heated argument" scenes
+- NO generic "people fighting" imagery
+- Instead, use visual metaphors: glass breaking, door closing, wilting flower, fading photograph
 
 EMOTIONAL ARC GUIDANCE:
 - Opening scenes: Establish mood and setting (wide shots, context)
@@ -264,7 +315,7 @@ Each prompt object must have:
 - "text": detailed visual prompt (60-120 words)
 - "mood": emotional tone of the scene
 - "timestamp": timestamp in MM:SS format matching the analysis sections`],
-    ["human", `Create the visual storyboard based on the analysis provided. Remember to generate exactly 10 prompts.`],
+    ["human", `Create the visual storyboard based on the analysis provided. Remember to generate exactly 10 prompts that follow the persona rules and include the concrete motifs literally.`],
   ]);
 }
 
@@ -275,7 +326,7 @@ export function createStoryboarderChain(config?: DirectorConfig) {
   const model = createModel(config);
   const template = createStoryboarderTemplate();
   const parser = new JsonOutputParser<StoryboardOutput>();
-  
+
   return template.pipe(model).pipe(parser);
 }
 
@@ -290,22 +341,50 @@ export async function runStoryboarder(
   config?: DirectorConfig
 ): Promise<StoryboardOutput> {
   const chain = createStoryboarderChain(config);
-  
+
+  // Get persona for this video purpose
+  const persona = getSystemPersona(videoPurpose);
+  const personaInstructions = `You are ${persona.name}, a ${persona.role}.
+
+YOUR CORE RULE:
+${persona.coreRule}
+
+YOUR VISUAL PRINCIPLES:
+${persona.visualPrinciples.map(p => `- ${p}`).join('\n')}
+
+WHAT TO AVOID:
+${persona.avoidList.map(a => `- ${a}`).join('\n')}`;
+
+  // Get style enhancement
+  const styleData = getStyleEnhancement(style);
+  const styleEnhancement = `MEDIUM AUTHENTICITY (apply these characteristics):
+${styleData.keywords.map(k => `- ${k}`).join('\n')}
+Overall: ${styleData.mediumDescription}`;
+
+  // Get purpose guidance
   const purposeGuidance = getPurposeGuidance(videoPurpose);
   const subjectGuidance = globalSubject.trim()
     ? `Keep this subject's appearance consistent across scenes.`
     : `Create cohesive scenes with consistent environmental elements.`;
-  
+
+  // Format concrete motifs from analysis
+  const concreteMotifs = analysis.concreteMotifs && analysis.concreteMotifs.length > 0
+    ? analysis.concreteMotifs.map(m => `- "${m.object}" (at ${m.timestamp}): ${m.emotionalContext}`).join('\n')
+    : "No specific objects mentioned - create appropriate visual elements based on themes.";
+
   const result = await chain.invoke({
     style,
+    personaInstructions,
+    styleEnhancement,
     purposeGuidance,
     globalSubject: globalSubject || "None specified",
     subjectGuidance,
+    concreteMotifs,
     cameraAngles: CAMERA_ANGLES.join(", "),
     lightingMoods: LIGHTING_MOODS.join(", "),
     analysis: JSON.stringify(analysis, null, 2),
   });
-  
+
   return result;
 }
 
@@ -322,7 +401,7 @@ export function createDirectorChain(
 ) {
   const analyzerChain = createAnalyzerChain(contentType, config);
   const storyboarderChain = createStoryboarderChain(config);
-  
+
   return RunnableSequence.from([
     // Stage 1: Analyze content
     async (input: {
@@ -333,7 +412,7 @@ export function createDirectorChain(
     }) => {
       const analysis = await analyzerChain.invoke({ content: input.content });
       console.log("[Director] Analysis complete:", JSON.stringify(analysis, null, 2));
-      
+
       return {
         analysis,
         style: input.style,
@@ -341,28 +420,55 @@ export function createDirectorChain(
         globalSubject: input.globalSubject,
       };
     },
-    // Stage 2: Generate storyboard
+    // Stage 2: Generate storyboard with persona and style enhancements
     async (input: {
       analysis: AnalysisOutput;
       style: string;
       videoPurpose: VideoPurpose;
       globalSubject: string;
     }) => {
+      // Get persona for this video purpose
+      const persona = getSystemPersona(input.videoPurpose);
+      const personaInstructions = `You are ${persona.name}, a ${persona.role}.
+
+YOUR CORE RULE:
+${persona.coreRule}
+
+YOUR VISUAL PRINCIPLES:
+${persona.visualPrinciples.map(p => `- ${p}`).join('\n')}
+
+WHAT TO AVOID:
+${persona.avoidList.map(a => `- ${a}`).join('\n')}`;
+
+      // Get style enhancement
+      const styleData = getStyleEnhancement(input.style);
+      const styleEnhancement = `MEDIUM AUTHENTICITY (apply these characteristics):
+${styleData.keywords.map(k => `- ${k}`).join('\n')}
+Overall: ${styleData.mediumDescription}`;
+
       const purposeGuidance = getPurposeGuidance(input.videoPurpose);
       const subjectGuidance = input.globalSubject.trim()
         ? `Keep this subject's appearance consistent across scenes.`
         : `Create cohesive scenes with consistent environmental elements.`;
-      
+
+      // Format concrete motifs from analysis
+      const concreteMotifs = input.analysis.concreteMotifs && input.analysis.concreteMotifs.length > 0
+        ? input.analysis.concreteMotifs.map(m => `- "${m.object}" (at ${m.timestamp}): ${m.emotionalContext}`).join('\n')
+        : "No specific objects mentioned - create appropriate visual elements based on themes.";
+
       const result = await storyboarderChain.invoke({
         style: input.style,
+        personaInstructions,
+        styleEnhancement,
         purposeGuidance,
         globalSubject: input.globalSubject || "None specified",
         subjectGuidance,
+        concreteMotifs,
         cameraAngles: CAMERA_ANGLES.join(", "),
         lightingMoods: LIGHTING_MOODS.join(", "),
         analysis: JSON.stringify(input.analysis, null, 2),
       });
-      
+
       console.log("[Director] Storyboard complete:", result.prompts?.length, "prompts generated");
       return result;
     },
@@ -377,43 +483,43 @@ export function createDirectorChain(
 function classifyError(error: unknown): DirectorErrorCode {
   if (error instanceof Error) {
     const message = error.message.toLowerCase();
-    
+
     // API key issues
     if (message.includes("api key") || message.includes("apikey") || message.includes("unauthorized")) {
       return "API_KEY_MISSING";
     }
-    
+
     // Rate limiting
     if (message.includes("rate limit") || message.includes("quota") || message.includes("429")) {
       return "RATE_LIMIT_EXCEEDED";
     }
-    
+
     // Network errors
     if (message.includes("network") || message.includes("fetch") || message.includes("econnrefused") || message.includes("enotfound")) {
       return "NETWORK_ERROR";
     }
-    
+
     // Timeout
     if (message.includes("timeout") || message.includes("timed out")) {
       return "TIMEOUT";
     }
-    
+
     // Parsing errors
     if (message.includes("parse") || message.includes("json") || message.includes("unexpected token")) {
       return "OUTPUT_PARSING_FAILED";
     }
-    
+
     // Validation errors
     if (message.includes("validation") || message.includes("schema") || message.includes("zod")) {
       return "SCHEMA_VALIDATION_FAILED";
     }
-    
+
     // Model initialization
     if (message.includes("model") && (message.includes("init") || message.includes("create"))) {
       return "MODEL_INIT_FAILED";
     }
   }
-  
+
   return "UNKNOWN_ERROR";
 }
 
@@ -428,7 +534,7 @@ function logError(
   const errorCode = classifyError(error);
   const errorMessage = error instanceof Error ? error.message : String(error);
   const errorStack = error instanceof Error ? error.stack : undefined;
-  
+
   console.error(`[Director] Error in ${stage}:`);
   console.error(`  Code: ${errorCode}`);
   console.error(`  Message: ${errorMessage}`);
@@ -451,34 +557,34 @@ async function validateAndLintPrompts(
 ): Promise<ImagePrompt[]> {
   const validatedPrompts: ImagePrompt[] = [];
   const previousPrompts: string[] = [];
-  
+
   for (let i = 0; i < prompts.length; i++) {
     const prompt = prompts[i];
-    
+
     // Run lint validation
     const issues = lintPrompt({
       promptText: prompt.text,
       globalSubject,
       previousPrompts,
     });
-    
+
     // Log any warnings
     if (issues.length > 0) {
       console.log(`[Director] Lint issues for prompt ${i + 1}:`, issues.map(issue => issue.code).join(", "));
     }
-    
+
     // Check for critical issues that need refinement
     const criticalIssues = issues.filter(
       issue => issue.code === "too_short" || issue.code === "missing_subject"
     );
     const hasCriticalIssues = criticalIssues.length > 0;
-    
+
     let finalText = prompt.text;
-    
+
     // Attempt refinement for critical issues
     if (hasCriticalIssues) {
       console.log(`[Director] Critical issues detected for prompt ${i + 1}, attempting refinement...`);
-      
+
       try {
         const refinementResult = await refineImagePrompt({
           promptText: prompt.text,
@@ -487,21 +593,21 @@ async function validateAndLintPrompts(
           intent: "auto",
           previousPrompts,
         });
-        
+
         finalText = refinementResult.refinedPrompt;
         console.log(`[Director] Prompt ${i + 1} refined successfully`);
-        
+
         // Re-lint the refined prompt to verify improvement
         const postRefinementIssues = lintPrompt({
           promptText: finalText,
           globalSubject,
           previousPrompts,
         });
-        
+
         const stillHasCriticalIssues = postRefinementIssues.some(
           issue => issue.code === "too_short" || issue.code === "missing_subject"
         );
-        
+
         if (stillHasCriticalIssues) {
           console.log(`[Director] Prompt ${i + 1} still has critical issues after refinement`);
         }
@@ -510,7 +616,7 @@ async function validateAndLintPrompts(
         // Keep original text if refinement fails
       }
     }
-    
+
     // Create ImagePrompt object
     const imagePrompt: ImagePrompt = {
       id: `prompt-${Date.now()}-${i}`,
@@ -519,11 +625,11 @@ async function validateAndLintPrompts(
       timestamp: prompt.timestamp,
       timestampSeconds: parseSRTTimestamp(prompt.timestamp) ?? 0,
     };
-    
+
     validatedPrompts.push(imagePrompt);
     previousPrompts.push(finalText);
   }
-  
+
   return validatedPrompts;
 }
 
@@ -555,37 +661,37 @@ export async function generatePromptsWithLangChain(
   config?: DirectorConfig
 ): Promise<ImagePrompt[]> {
   const startTime = Date.now();
-  
+
   try {
     console.log("[Director] Starting LangChain workflow...");
     console.log("[Director] Content type:", contentType);
     console.log("[Director] Style:", style);
     console.log("[Director] Purpose:", videoPurpose);
-    
+
     // Validate inputs before proceeding
     if (!srtContent || srtContent.trim().length === 0) {
       console.warn("[Director] Empty SRT content provided, falling back to existing implementation");
       return executeFallback(srtContent, style, contentType, videoPurpose, globalSubject);
     }
-    
+
     // Check for API key availability
-    const apiKey = process.env.GEMINI_API_KEY || 
-                   process.env.VITE_GEMINI_API_KEY || 
-                   process.env.API_KEY || 
-                   "";
-    
+    const apiKey = process.env.GEMINI_API_KEY ||
+      process.env.VITE_GEMINI_API_KEY ||
+      process.env.API_KEY ||
+      "";
+
     if (!apiKey) {
       console.warn("[Director] No API key found, falling back to existing implementation");
-      logError("initialization", new Error("API key not configured"), { 
-        contentType, 
-        style 
+      logError("initialization", new Error("API key not configured"), {
+        contentType,
+        style
       });
       return executeFallback(srtContent, style, contentType, videoPurpose, globalSubject);
     }
-    
+
     // Create and run the director chain
     const directorChain = createDirectorChain(contentType, config);
-    
+
     let result;
     try {
       result = await directorChain.invoke({
@@ -602,7 +708,7 @@ export async function generatePromptsWithLangChain(
         videoPurpose,
         srtContentLength: srtContent.length,
       });
-      
+
       // Throw a structured error for the outer catch to handle
       throw new DirectorServiceError(
         `Chain execution failed: ${chainError instanceof Error ? chainError.message : String(chainError)}`,
@@ -611,7 +717,7 @@ export async function generatePromptsWithLangChain(
         chainError instanceof Error ? chainError : undefined
       );
     }
-    
+
     // Validate the result structure
     if (!result || !result.prompts || !Array.isArray(result.prompts)) {
       console.warn("[Director] Invalid result structure, falling back");
@@ -621,13 +727,13 @@ export async function generatePromptsWithLangChain(
       });
       return executeFallback(srtContent, style, contentType, videoPurpose, globalSubject);
     }
-    
+
     // Check if we got any prompts
     if (result.prompts.length === 0) {
       console.warn("[Director] No prompts generated, falling back");
       return executeFallback(srtContent, style, contentType, videoPurpose, globalSubject);
     }
-    
+
     // Validate and lint the generated prompts
     let validatedPrompts: ImagePrompt[];
     try {
@@ -640,7 +746,7 @@ export async function generatePromptsWithLangChain(
       logError("validation", validationError, {
         promptCount: result.prompts.length,
       });
-      
+
       // If validation fails, still try to return the raw prompts with basic transformation
       validatedPrompts = result.prompts.map((p, i) => ({
         id: `prompt-${Date.now()}-${i}`,
@@ -650,14 +756,14 @@ export async function generatePromptsWithLangChain(
         timestampSeconds: parseSRTTimestamp(p.timestamp) ?? 0,
       }));
     }
-    
+
     const duration = Date.now() - startTime;
     console.log(`[Director] Workflow complete: ${validatedPrompts.length} prompts generated in ${duration}ms`);
     return validatedPrompts;
-    
+
   } catch (error) {
     const duration = Date.now() - startTime;
-    
+
     // Log the error with full context
     logError("workflow", error, {
       contentType,
@@ -666,7 +772,7 @@ export async function generatePromptsWithLangChain(
       duration,
       srtContentLength: srtContent?.length || 0,
     });
-    
+
     // Execute fallback
     console.log("[Director] Executing fallback to existing prompt generation...");
     return executeFallback(srtContent, style, contentType, videoPurpose, globalSubject);
@@ -693,7 +799,7 @@ async function executeFallback(
 ): Promise<ImagePrompt[]> {
   try {
     console.log(`[Director] Fallback: Using ${contentType === "story" ? "generatePromptsFromStory" : "generatePromptsFromLyrics"}`);
-    
+
     if (contentType === "story") {
       return await generatePromptsFromStory(srtContent, style, globalSubject, videoPurpose);
     }
