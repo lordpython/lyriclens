@@ -18,13 +18,11 @@ import { HumanMessage, AIMessage, ToolMessage } from "@langchain/core/messages";
 import { tool } from "@langchain/core/tools";
 import { z } from "zod";
 import { ImagePrompt } from "../types";
-import { VideoPurpose, CAMERA_ANGLES, LIGHTING_MOODS } from "../constants";
+import { VideoPurpose } from "../constants";
 import {
   lintPrompt,
-  getPurposeGuidance,
   getSystemPersona,
   refineImagePrompt,
-  type PromptLintIssue
 } from "./promptService";
 import { parseSRTTimestamp } from "../utils/srtParser";
 import {
@@ -82,6 +80,39 @@ const searchVisualReferencesTool = tool(
 /**
  * Tool: Generate Storyboard
  */
+
+/**
+ * Sanitizes a JSON string by replacing unescaped control characters.
+ * AI models sometimes return JSON with raw newlines/tabs inside string values.
+ */
+function sanitizeJsonString(jsonStr: string): string {
+  // First, try to parse as-is - only sanitize if needed
+  try {
+    JSON.parse(jsonStr);
+    return jsonStr;
+  } catch {
+    // Continue with sanitization
+  }
+
+  // Replace control characters that are not properly escaped
+  // This regex finds unescaped control characters within string values
+  let sanitized = jsonStr;
+
+  // Replace literal newlines, carriage returns, and tabs with their escaped versions
+  // But only within string values (after a colon and quote, before closing quote)
+  sanitized = sanitized
+    .replace(/[\x00-\x1F\x7F]/g, (char) => {
+      switch (char) {
+        case '\n': return '\\n';
+        case '\r': return '\\r';
+        case '\t': return '\\t';
+        default: return ''; // Remove other control characters
+      }
+    });
+
+  return sanitized;
+}
+
 const generateStoryboardTool = tool(
   async ({
     analysisJson,
@@ -96,23 +127,26 @@ const generateStoryboardTool = tool(
   }) => {
     try {
       console.log("[AgentDirector] Generating storyboard...");
-      const analysis: AnalysisOutput = JSON.parse(analysisJson);
+
+      // Sanitize the JSON string to handle control characters from AI output
+      const sanitizedJson = sanitizeJsonString(analysisJson);
+      const analysis: AnalysisOutput = JSON.parse(sanitizedJson);
       const storyboard = await runStoryboarder(
         analysis,
         style,
         videoPurpose as VideoPurpose,
         globalSubject
       );
-      
+
       // Validate the storyboard structure
       if (!storyboard || !storyboard.prompts || !Array.isArray(storyboard.prompts)) {
         throw new Error("Invalid storyboard structure: missing prompts array");
       }
-      
+
       if (storyboard.prompts.length === 0) {
         throw new Error("Storyboard contains no prompts");
       }
-      
+
       // Validate each prompt has required fields
       for (let i = 0; i < storyboard.prompts.length; i++) {
         const prompt = storyboard.prompts[i];
@@ -123,7 +157,7 @@ const generateStoryboardTool = tool(
           throw new Error(`Prompt ${i} missing or invalid timestamp field`);
         }
       }
-      
+
       console.log(`[AgentDirector] Storyboard validated: ${storyboard.prompts.length} prompts`);
       return JSON.stringify(storyboard, null, 2);
     } catch (error) {
@@ -135,6 +169,7 @@ const generateStoryboardTool = tool(
   {
     name: "generate_storyboard",
     description: `Generate a visual storyboard with 10 detailed image prompts based on content analysis.
+CRITICAL: All prompts must share the same visual universe - consistent lighting, environment texture, and cinematic style.
 Use this AFTER analyzing content.`,
     schema: z.object({
       analysisJson: z.string().describe("The JSON output from analyze_content tool"),
@@ -203,7 +238,8 @@ const critiqueStoryboardTool = tool(
   }) => {
     try {
       console.log("[AgentDirector] Critiquing storyboard...");
-      const storyboard: StoryboardOutput = JSON.parse(storyboardJson);
+      const sanitizedJson = sanitizeJsonString(storyboardJson);
+      const storyboard: StoryboardOutput = JSON.parse(sanitizedJson);
       const critique = critiqueStoryboard(storyboard, globalSubject);
       return JSON.stringify(critique, null, 2);
     } catch (error) {
@@ -350,7 +386,7 @@ function critiqueStoryboard(
   const errorPrompts = issues.filter(i => i.promptIndex >= 0);
 
   if (errorPrompts.length > 0) {
-    const uniqueIndices = [...new Set(errorPrompts.map(i => i.promptIndex))];
+    const uniqueIndices = Array.from(new Set(errorPrompts.map(i => i.promptIndex)));
     recommendations.push(`Refine prompts at indices: ${uniqueIndices.join(", ")}`);
   }
 
@@ -393,10 +429,15 @@ const LANGCHAIN_VERBOSE = true;
 function getAgentSystemPrompt(purpose: VideoPurpose): string {
   const persona = getSystemPersona(purpose);
 
-  return `You are ${persona.name}, an expert ${persona.role}. Create compelling visual storyboards.
+  return `You are ${persona.name}, a Visionary Film Director known for atmospheric, non-linear storytelling (Style: Christopher Nolan meets A24).
 
 ## Your Identity & Core Rule
-${persona.coreRule}
+ATMOSPHERIC RESONANCE: Do NOT just visualize the nouns in the lyrics. Visualize the *feeling*. If lyrics say "candle", do NOT just show a candle. Show a lonely room where a candle has just burned out, implying absence. The object is a prop; the EMOTION is the subject.
+
+## Quality Standards
+- CRITICAL: Every shot must look like it belongs to the SAME high-budget movie.
+- UNIFYING THREAD: Use a consistent visual motif in every scene (e.g., "cold blue fog" or "warm dust particles").
+- AVOID: Isolated objects on plain backgrounds. Always place objects in a rich, textured environment.
 
 ## Your Visual Principles
 ${persona.visualPrinciples.map(p => `- ${p}`).join('\n')}
@@ -405,9 +446,9 @@ ${persona.visualPrinciples.map(p => `- ${p}`).join('\n')}
 ${persona.avoidList.map(a => `- ${a}`).join('\n')}
 
 ## Workflow
-1. ANALYZE content using analyze_content tool - HUNT FOR CONCRETE OBJECTS
+1. ANALYZE content using analyze_content tool - IDENTIFY EMOTIONAL THEMES
 2. SEARCH for visual references if needed
-3. GENERATE storyboard - ensure concrete objects appear LITERALLY
+3. GENERATE storyboard - prioritize ATMOSPHERE over literal objects
 4. CRITIQUE your work using critique_storyboard
 5. REFINE weak prompts if score < threshold
 
@@ -417,12 +458,6 @@ ${persona.avoidList.map(a => `- ${a}`).join('\n')}
 - NO text, logos, or watermarks
 - Vary camera angles across scenes
 - Match visual intensity to emotional intensity
-- CRITICAL: If lyrics mention an object (candle, door, rain), show that ACTUAL object
-
-## Anti-Patterns to Reject
-- NO "couple arguing" scenes - use glass breaking or door closing instead
-- NO "sad person" when lyrics say "candle" - show the actual candle
-- NO generic interpretations of specific imagery
 
 When done, output the final storyboard JSON.`;
 }
@@ -499,12 +534,29 @@ export async function generatePromptsWithAgent(
 
     // Initial message with persona-driven system prompt
     const systemPrompt = getAgentSystemPrompt(videoPurpose);
+
+    // Professional style wrapper to enforce high-end cinematic look
+    const PRO_STYLE_WRAPPER = `GLOBAL VISUAL SIGNATURE (Apply to ALL prompts):
+- Camera: Arri Alexa 65, Panavision 70mm lenses
+- Color Grading: Teal & Orange, low contrast shadows, slightly desaturated
+- Texture: Fine 35mm film grain, atmospheric haze/volumetric lighting
+- Aspect Ratio: 2.39:1 Anamorphic`;
+
+    // Consistency rule to enforce visual cohesion
+    const consistencyRule = `CONSISTENCY CHECK:
+You must pick ONE specific lighting condition and ONE specific environment texture and use it in EVERY single prompt.
+Example: If Scene 1 is "rainy window at night", Scene 5 cannot be "bright sunny field". All 10 prompts must share the same "visual universe".`;
+
     const taskMessage = `Create a visual storyboard for this ${contentType} content.
 
-Style: ${style}
+${PRO_STYLE_WRAPPER}
+
+Style Context: ${style}
 Video Purpose: ${videoPurpose}
 Global Subject: ${globalSubject || "None"}
 Quality Threshold: ${mergedConfig.qualityThreshold}
+
+${consistencyRule}
 
 Content:
 ${srtContent}
@@ -534,25 +586,25 @@ Follow workflow: analyze → generate → critique → refine if needed.`;
       if (toolCalls.length === 0) {
         // No more tool calls - check if we have a valid storyboard
         console.log("[AgentDirector] No tool calls, checking final storyboard...");
-        
+
         // Try to extract from response content first
         const extractedStoryboard = extractStoryboardFromContent(response.content as string);
         if (extractedStoryboard) {
           finalStoryboard = extractedStoryboard;
         }
-        
+
         // If we have a storyboard and it meets quality threshold, we're done
         if (finalStoryboard && lastCritiqueScore >= mergedConfig.qualityThreshold) {
           console.log(`[AgentDirector] Storyboard meets quality threshold (${lastCritiqueScore})`);
           break;
         }
-        
+
         // If we have a storyboard but no critique score, accept it anyway
         if (finalStoryboard && lastCritiqueScore === 0) {
           console.log("[AgentDirector] Storyboard found without critique, accepting");
           break;
         }
-        
+
         // If no storyboard found, break anyway to avoid infinite loop
         if (!finalStoryboard) {
           console.warn("[AgentDirector] No storyboard found in final response");
@@ -576,7 +628,7 @@ Follow workflow: analyze → generate → critique → refine if needed.`;
         // Track storyboard results
         if (toolCall.name === "generate_storyboard") {
           try {
-            const storyboard = JSON.parse(result);
+            const storyboard = JSON.parse(sanitizeJsonString(result));
             if (storyboard.prompts && storyboard.prompts.length > 0) {
               finalStoryboard = storyboard;
               console.log(`[AgentDirector] Storyboard captured: ${storyboard.prompts.length} prompts`);
@@ -589,7 +641,7 @@ Follow workflow: analyze → generate → critique → refine if needed.`;
         // Track critique scores
         if (toolCall.name === "critique_storyboard") {
           try {
-            const critique = JSON.parse(result);
+            const critique = JSON.parse(sanitizeJsonString(result));
             lastCritiqueScore = critique.overallScore || 0;
             console.log(`[AgentDirector] Critique score: ${lastCritiqueScore}`);
           } catch (error) {
@@ -612,7 +664,7 @@ Follow workflow: analyze → generate → critique → refine if needed.`;
     console.error("[AgentDirector] Final storyboard:", finalStoryboard);
     console.error("[AgentDirector] Last critique score:", lastCritiqueScore);
     console.error("[AgentDirector] Iterations completed:", iterations);
-    
+
     // Log the last few messages for debugging
     const lastMessages = messages.slice(-3);
     console.error("[AgentDirector] Last messages:", lastMessages.map(m => ({
@@ -645,7 +697,8 @@ function extractStoryboardFromContent(content: string): StoryboardOutput | null 
     if (match) {
       const jsonStr = match[1] || match[0];
       try {
-        const parsed = JSON.parse(jsonStr);
+        const sanitized = sanitizeJsonString(jsonStr);
+        const parsed = JSON.parse(sanitized);
         // Validate it has the expected structure
         if (parsed && parsed.prompts && Array.isArray(parsed.prompts)) {
           console.log(`[AgentDirector] Extracted storyboard with ${parsed.prompts.length} prompts`);

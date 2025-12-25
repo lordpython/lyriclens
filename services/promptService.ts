@@ -39,6 +39,7 @@ export type PromptLintIssueCode =
   | "too_long"
   | "repetitive"
   | "missing_subject"
+  | "no_leading_subject"
   | "contains_text_instruction"
   | "contains_logos_watermarks"
   | "weak_visual_specificity"
@@ -88,7 +89,7 @@ export function jaccardSimilarity(a: string, b: string): number {
   if (sa.size === 0 || sb.size === 0) return 0;
 
   let inter = 0;
-  for (const w of sa) if (sb.has(w)) inter++;
+  Array.from(sa).forEach(w => { if (sb.has(w)) inter++; });
   const union = sa.size + sb.size - inter;
   return union === 0 ? 0 : inter / union;
 }
@@ -124,7 +125,7 @@ export function getSystemPersona(purpose: VideoPurpose): Persona {
       type: "visual_poet",
       name: "Visual Poet",
       role: "Music Video Director",
-      coreRule: "METAPHOR LITERALISM: If the lyrics say 'candle', show an actual candle. If they say 'fire', show real fire. The object IS the metaphor - do not replace concrete objects with abstract interpretations.",
+      coreRule: "ATMOSPHERIC RESONANCE: Prioritize the EMOTION of the lyric over the object. If lyrics say 'candle', visualize 'loneliness' or 'fading hope' using lighting and shadows. Do not simply show the object mentioned.",
       visualPrinciples: [
         "Literal visualization of mentioned objects",
         "Emotional resonance through cinematography",
@@ -532,11 +533,30 @@ export function lintPrompt(params: {
 
   const norm = normalizeForSimilarity(promptText);
 
-  if (/\btext\b|\bsubtitles\b|\bcaption\b|\btypography\b/.test(norm)) {
+  // Check if prompt starts with a concrete subject (article + noun pattern)
+  const leadingSubjectPattern = /^(a|an|the|two|three|several|many|some|all|every|their|his|her|its|our|\w+ed|\w+ing)\s+\w+/i;
+  const trimmedPrompt = promptText.trim();
+  if (!leadingSubjectPattern.test(trimmedPrompt) && words > 5) {
+    // If it doesn't match the pattern but starts with a capital letter + word, it might be a noun
+    // We only flag if it looks like a preposition or weak start
+    const firstWord = trimmedPrompt.split(/\s+/)[0].toLowerCase();
+    const weakStarts = ["in", "through", "on", "at", "by", "with", "from", "when", "while", "during", "beneath", "under", "above"];
+
+    if (weakStarts.includes(firstWord)) {
+      issues.push({
+        code: "no_leading_subject",
+        message:
+          `Prompt starts with a preposition ("${firstWord}"). It should start with a concrete subject (e.g., 'A lone figure...', 'The vintage car...', 'Weathered hands...')`,
+        severity: "warn",
+      });
+    }
+  }
+
+  if (/\btext\b|\bsubtitles\b|\bcaption\b|\btypography\b|\blabel\b|\bwords\b|\btitle\b/.test(norm)) {
     issues.push({
       code: "contains_text_instruction",
       message:
-        "Prompt mentions text/subtitles/typography; this often causes unwanted text in images.",
+        "Prompt mentions text/subtitles/typography/labels; this often causes unwanted text in images.",
       severity: "warn",
     });
   }
@@ -569,20 +589,41 @@ export function lintPrompt(params: {
 
   if (globalSubject && globalSubject.trim().length > 0) {
     const subjNorm = normalizeForSimilarity(globalSubject);
-    const subjectTokens = subjNorm.split(" ").filter(Boolean);
-    const missingCount = subjectTokens.filter(
-      (t) => t.length >= 4 && !norm.includes(t),
-    ).length;
+    const promptNorm = normalizeForSimilarity(promptText);
 
-    // If the prompt doesn't echo enough of the subject, consistency tends to drift.
-    if (
-      subjectTokens.length >= 2 &&
-      missingCount / subjectTokens.length > 0.6
-    ) {
+    // Extract meaningful tokens from global subject (length >= 3)
+    const subjectTokens = subjNorm.split(" ").filter(t => t.length >= 3);
+
+    // Common subject synonyms to avoid false positives for "person"
+    const personSynonyms = ["person", "figure", "character", "individual", "man", "woman", "human", "someone", "somebody"];
+    const subjectIsPerson = subjectTokens.some(t => personSynonyms.includes(t));
+
+    // Check if prompt contains any of the important subject tokens
+    const foundTokens = subjectTokens.filter(t => {
+      // Direct match
+      if (promptNorm.includes(t)) return true;
+
+      // If subject is a person, allow common synonyms
+      if (personSynonyms.includes(t)) {
+        return personSynonyms.some(s => promptNorm.includes(s));
+      }
+
+      // Basic root matching for verbs (e.g., walking -> walk)
+      if (t.endsWith("ing") && promptNorm.includes(t.slice(0, -3))) return true;
+      if (t.endsWith("s") && promptNorm.includes(t.slice(0, -1))) return true;
+
+      return false;
+    });
+
+    const missingRatio = 1 - (foundTokens.length / subjectTokens.length);
+
+    // If more than 70% of the subject is missing, flag it
+    // But allow drift if the prompt is long and detailed (might be atmospheric)
+    if (missingRatio > 0.7 && words < 100) {
       issues.push({
         code: "missing_subject",
         message:
-          "Prompt doesn't strongly reference your Global Subject; this can cause character/object drift across scenes.",
+          `Prompt doesn't strongly reference the Global Subject ("${globalSubject}"). This can cause character/object drift.`,
         severity: "warn",
       });
     }
@@ -735,13 +776,21 @@ ${structureGuidance}
 ${visualVariety}
 
 PROMPT WRITING RULES:
-1. Each prompt must be 60-120 words with SPECIFIC visual details
-2. Include: subject + action + environment + lighting + camera angle + atmosphere
-3. NO text, typography, subtitles, logos, watermarks, or UI elements
-4. NO generic phrases like "beautiful", "stunning", "amazing" - be SPECIFIC
-5. Reference the main subject by their specific features, not just "the subject"
-6. Vary compositions: rule-of-thirds, centered, symmetrical, asymmetrical
-7. Include sensory details: textures, materials, weather, time of day
+1. EVERY prompt MUST begin with a concrete subject noun (e.g., "A lone figure...", "A vintage car...", "A glowing orb...", "Weathered hands...")
+2. Each prompt must be 60-120 words with SPECIFIC visual details
+3. MANDATORY CHECKLIST for each prompt (include ALL of these):
+   - Subject: WHO or WHAT is in the scene (concrete noun, not abstract)
+   - Action/Pose: What the subject is doing
+   - Setting: WHERE the scene takes place
+   - Lighting: Type and quality (e.g., "golden hour backlighting", "harsh overhead fluorescent", "soft diffused window light")
+   - Texture: At least one tactile detail (e.g., "weathered wood grain", "rain-slicked asphalt", "velvet fabric")
+   - Camera: Shot type and angle (e.g., "extreme close-up at eye level", "wide establishing shot from low angle")
+   - Atmosphere: Mood and ambient details
+4. NEVER include text, titles, lyrics, subtitles, captions, labels, typography, written words, or UI elements inside the image - this is a CRITICAL requirement
+5. NO generic phrases like "beautiful", "stunning", "amazing" - be SPECIFIC with descriptors
+6. Reference the main subject by their specific features, not just "the subject"
+7. Vary compositions: rule-of-thirds, centered, symmetrical, asymmetrical
+8. Include sensory details: textures, materials, weather, time of day
 
 EMOTIONAL ARC:
 - Scene 1-2: Establish mood and setting (wide shots, context)
@@ -753,7 +802,7 @@ CONTENT TO ANALYZE:
 ${content.slice(0, 15000)}
 
 OUTPUT: Generate 8-12 prompts as JSON with 'prompts' array.
-Each item: { "text": "detailed visual prompt", "mood": "emotional tone", "timestamp": "MM:SS" }
+Each item: { "text": "detailed visual prompt starting with concrete subject", "mood": "emotional tone", "timestamp": "MM:SS" }
 
 Timestamps should align with natural section breaks in the content.`;
 };
@@ -809,9 +858,11 @@ Requirements:
 - Make it vivid and specific (setting, lighting, camera/composition, color palette, mood).
 - Keep style consistent with the chosen preset.
 - Do NOT include any text/typography/subtitles/logos/watermarks instructions.
-- If Global Subject is provided, restate its key identifiers (face/outfit/materials) so the subject stays consistent.
+- If Global Subject is provided, it MUST be the primary focus. Restate its key identifiers explicitly (face, hair, outfit, materials) so the subject stays 100% consistent across scenes.
+- If the subject is a person, use consistent descriptors.
+- Ensure the prompt STARTS with the subject name or a concrete description of it.
+- Keep length 70–130 words for maximum detail.
 - Avoid repeating generic phrases like "highly detailed" or "stunning" too much.
-- Keep length 60–120 words.
 
 User Prompt:
 ${promptText}`,

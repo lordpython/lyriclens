@@ -266,6 +266,8 @@ ART STYLE: {style}
 GLOBAL SUBJECT: {globalSubject}
 {subjectGuidance}
 
+CRITICAL: If a GLOBAL SUBJECT is provided, you MUST use it as the main subject in almost every scene. Don't wander away from the subject.
+
 CONCRETE MOTIFS (MUST INCLUDE LITERALLY):
 {concreteMotifs}
 
@@ -285,16 +287,24 @@ CONTENT ANALYSIS:
 {analysis}
 
 PROMPT WRITING RULES:
-1. Each prompt must be 60-120 words with SPECIFIC visual details
-2. Include: subject + action + environment + lighting + camera angle + atmosphere
-3. NO text, typography, subtitles, logos, watermarks, or UI elements
-4. NO generic phrases like "beautiful", "stunning", "amazing" - be SPECIFIC
-5. Reference the main subject by their specific features, not just "the subject"
-6. Vary compositions: rule-of-thirds, centered, symmetrical, asymmetrical
-7. Include sensory details: textures, materials, weather, time of day
+1. EVERY prompt MUST begin with a concrete subject noun (e.g., "A lone figure...", "A vintage car...", "A glowing orb...", "Weathered hands...")
+2. Each prompt must be 60-120 words with SPECIFIC visual details
+3. MANDATORY CHECKLIST for each prompt (include ALL of these):
+   - Subject: WHO or WHAT is in the scene (concrete noun, not abstract)
+   - Action/Pose: What the subject is doing
+   - Setting: WHERE the scene takes place
+   - Lighting: Type and quality (e.g., "golden hour backlighting", "harsh overhead fluorescent", "soft diffused window light")
+   - Texture: At least one tactile detail (e.g., "weathered wood grain", "rain-slicked asphalt", "velvet fabric")
+   - Camera: Shot type and angle (e.g., "extreme close-up at eye level", "wide establishing shot from low angle")
+   - Atmosphere: Mood and ambient details
+4. NEVER include text, titles, lyrics, subtitles, captions, labels, typography, written words, or UI elements inside the image - this is a CRITICAL requirement
+5. NO generic phrases like "beautiful", "stunning", "amazing" - be SPECIFIC with descriptors
+6. Reference the main subject by their specific features, not just "the subject"
+7. Vary compositions: rule-of-thirds, centered, symmetrical, asymmetrical
 8. NEVER repeat the same camera angle in consecutive scenes
 9. Match visual intensity to emotional intensity from analysis
 10. INCLUDE at least one concrete motif from the list in each relevant scene
+11. SUBJECT CONSISTENCY: The GLOBAL SUBJECT takes priority. If a subject is specified, it MUST be the focus of at least 80% of the scenes.
 
 AVOID GENERIC CONFLICT TROPES:
 - NO "couple arguing" or "heated argument" scenes
@@ -312,7 +322,7 @@ CRITICAL REQUIREMENT: You MUST generate EXACTLY 10 prompts. Not 7, not 6, but ex
 OUTPUT FORMAT:
 Return a valid JSON object (no markdown code blocks) with a "prompts" array containing exactly 10 objects.
 Each prompt object must have:
-- "text": detailed visual prompt (60-120 words)
+- "text": detailed visual prompt (60-120 words) starting with a concrete subject
 - "mood": emotional tone of the scene
 - "timestamp": timestamp in MM:SS format matching the analysis sections`],
     ["human", `Create the visual storyboard based on the analysis provided. Remember to generate exactly 10 prompts that follow the persona rules and include the concrete motifs literally.`],

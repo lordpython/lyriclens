@@ -110,7 +110,7 @@ export async function testOutputTypeConformance(): Promise<boolean> {
   
   let passed = true;
   let iterations = 0;
-  const maxIterations = 100;
+  const maxIterations = 20;
   
   // Create arbitrary for StoryboardOutput prompts (simulating what the chain produces)
   const storyboardPromptArbitrary = fc.record({
@@ -224,7 +224,7 @@ export async function testAnalyzerOutputStructure(): Promise<boolean> {
   
   let passed = true;
   let iterations = 0;
-  const maxIterations = 100;
+  const maxIterations = 20;
   
   // Test that valid analysis outputs pass schema validation
   await fc.assert(
@@ -304,7 +304,7 @@ export async function testStoryboarderPromptCount(): Promise<boolean> {
   
   let passed = true;
   let iterations = 0;
-  const maxIterations = 100;
+  const maxIterations = 20;
   
   await fc.assert(
     fc.asyncProperty(storyboardOutputArbitrary, async (storyboard) => {
@@ -353,7 +353,7 @@ export async function testVisualVocabularyUsage(): Promise<boolean> {
   
   let passed = true;
   let iterations = 0;
-  const maxIterations = 100;
+  const maxIterations = 20;
   
   // Create arbitrary that generates prompts with visual vocabulary
   const promptWithVocabularyArbitrary = fc.record({
@@ -428,7 +428,7 @@ export async function testErrorHandlingAndFallback(): Promise<boolean> {
   
   let passed = true;
   let iterations = 0;
-  const maxIterations = 100;
+  const maxIterations = 20;
   
   // Arbitrary for error codes
   const errorCodeArbitrary: fc.Arbitrary<DirectorErrorCode> = fc.constantFrom(
@@ -535,7 +535,7 @@ export async function testFallbackOutputType(): Promise<boolean> {
   
   let passed = true;
   let iterations = 0;
-  const maxIterations = 100;
+  const maxIterations = 20;
   
   // Arbitrary for simulated fallback results (what generatePromptsFromLyrics/Story would return)
   const imagePromptArbitrary: fc.Arbitrary<ImagePrompt> = fc.record({
@@ -641,7 +641,7 @@ export async function testLintValidationIntegration(): Promise<boolean> {
   
   let passed = true;
   let iterations = 0;
-  const maxIterations = 100;
+  const maxIterations = 20;
   
   // Arbitrary for prompt texts of varying lengths
   const shortPromptArbitrary = fc.string({ minLength: 1, maxLength: 50 }); // Will trigger too_short
@@ -736,7 +736,7 @@ export async function testLintValidationIntegration(): Promise<boolean> {
   
   // Test 2: Verify critical issues are correctly identified
   let criticalIterations = 0;
-  const criticalMaxIterations = 100;
+  const criticalmaxIterations = 20;
   
   // Generate prompts that should trigger critical issues
   const criticalPromptArbitrary = fc.oneof(

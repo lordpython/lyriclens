@@ -8,6 +8,9 @@
     "server": "npx tsx server/index.ts",
     "dev:all": "concurrently \"npm run dev\" \"npm run server\"",
     "test": "npx tsx test/runTest.ts",
+    "test:e2e": "playwright test",
+    "test:e2e:ui": "playwright test --ui",
+    "test:all": "npm test && npm run test:e2e",
     "build": "vite build",
     "preview": "vite preview",
     "cap:sync": "npx cap sync",
@@ -53,6 +56,7 @@
     "zod": "^4.2.1"
   },
   "devDependencies": {
+    "@playwright/test": "^1.52.0",
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.6",
     "@types/multer": "^2.0.0",

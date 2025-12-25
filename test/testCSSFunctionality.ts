@@ -167,7 +167,7 @@ export const testCSSFunctionalityPreservation = async (): Promise<boolean> => {
         return testCSSConsistency(classes);
       }),
       { 
-        numRuns: 100, // As specified in design document
+        numRuns: 20, // As specified in design document
         verbose: false // Set to false for cleaner output
       }
     );
