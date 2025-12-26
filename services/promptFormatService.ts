@@ -61,7 +61,7 @@ export interface ResponseExample {
 export interface FormatCorrectionPattern {
   name: string;
   pattern: RegExp;
-  correction: (match: string) => string;
+  correction: (...args: string[]) => string;
   description: string;
 }
 
@@ -477,7 +477,7 @@ class ResponsePatternLibrary {
   matchesKnownPattern(response: string): boolean {
     const responsePattern = this.extractPattern(response);
     return this.patterns.has(this.generatePatternId(response)) ||
-      Array.from(this.patterns.values()).some(p => 
+      Array.from(this.patterns.values()).some(p =>
         this.patternSimilarity(p.pattern, responsePattern) > 0.8
       );
   }
@@ -542,10 +542,10 @@ class ResponsePatternLibrary {
   private patternSimilarity(pattern1: string, pattern2: string): number {
     const tokens1 = new Set(pattern1.split(/\s+/));
     const tokens2 = new Set(pattern2.split(/\s+/));
-    
+
     let intersection = 0;
     tokens1.forEach(t => { if (tokens2.has(t)) intersection++; });
-    
+
     const union = tokens1.size + tokens2.size - intersection;
     return union === 0 ? 0 : intersection / union;
   }
@@ -593,11 +593,11 @@ export function preprocessFormatCorrection(content: string): FormatCorrectionRes
   // Apply each correction pattern
   for (const pattern of FORMAT_CORRECTION_PATTERNS) {
     const before = corrected;
-    
+
     if (pattern.name === 'fix_unquoted_keys') {
       // Special handling for unquoted keys pattern
-      corrected = corrected.replace(pattern.pattern, (match, prefix, key, suffix) => {
-        return pattern.correction(match, prefix, key, suffix);
+      corrected = corrected.replace(pattern.pattern, (...args: string[]) => {
+        return pattern.correction(...args);
       });
     } else if (pattern.name === 'remove_markdown_json_blocks' || pattern.name === 'remove_markdown_blocks') {
       // Extract content from markdown blocks
@@ -670,8 +670,8 @@ export function needsFormatCorrection(content: string): boolean {
  * Requirements: 5.1
  */
 export function generateFormatSpecificationText(type: 'storyboard' | 'analysis'): string {
-  const spec = type === 'storyboard' 
-    ? getStoryboardFormatSpecification() 
+  const spec = type === 'storyboard'
+    ? getStoryboardFormatSpecification()
     : getAnalysisFormatSpecification();
 
   return `
@@ -692,8 +692,8 @@ ${spec.commonMistakes.map(m => `- ${m}`).join('\n')}
  * Requirements: 5.3
  */
 export function generateExampleText(type: 'storyboard' | 'analysis'): string {
-  const examples = type === 'storyboard' 
-    ? getStoryboardExamples() 
+  const examples = type === 'storyboard'
+    ? getStoryboardExamples()
     : getAnalysisExamples();
 
   if (examples.length === 0) {
@@ -731,6 +731,4 @@ CRITICAL: Return ONLY the JSON object. No markdown, no code blocks, no additiona
 `;
 }
 
-// --- Export Types ---
-
-export type { StoryboardJSONSchema, FormatSpecification, ResponseExample, FormatCorrectionPattern, SuccessfulResponsePattern, FormatCorrectionResult };
+// Note: Types are already exported inline with their definitions above
