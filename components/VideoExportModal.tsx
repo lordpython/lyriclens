@@ -16,6 +16,9 @@ import {
   ArrowRightLeft,
   CircleSlash,
   Sparkles,
+  Type,
+  Activity,
+  Palette,
 } from "lucide-react";
 import {
   exportVideoWithFFmpeg,
@@ -37,7 +40,8 @@ import { Label } from "@/components/ui/label";
 import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
 import { Card, CardContent } from "@/components/ui/card";
-import { cn } from "@/lib/utils";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { cn, isRTL } from "@/lib/utils";
 
 interface VideoExportModalProps {
   songData: SongData;
@@ -45,6 +49,25 @@ interface VideoExportModalProps {
   isOpen: boolean;
   /** Content mode - "music" includes visualizer, "story" skips it */
   contentMode?: "music" | "story";
+}
+
+/**
+ * Detect if the song's lyrics are primarily RTL (Arabic, Hebrew, etc.)
+ */
+function detectLyricsRTL(songData: SongData): boolean {
+  if (!songData.parsedSubtitles || songData.parsedSubtitles.length === 0) {
+    return false;
+  }
+  // Check first few subtitles to determine primary text direction
+  const samplesToCheck = Math.min(5, songData.parsedSubtitles.length);
+  let rtlCount = 0;
+  for (let i = 0; i < samplesToCheck; i++) {
+    if (isRTL(songData.parsedSubtitles[i].text)) {
+      rtlCount++;
+    }
+  }
+  // If majority of samples are RTL, consider the content RTL
+  return rtlCount > samplesToCheck / 2;
 }
 
 export const VideoExportModal: React.FC<VideoExportModalProps> = ({
@@ -61,6 +84,9 @@ export const VideoExportModal: React.FC<VideoExportModalProps> = ({
   const [videoBlobUrl, setVideoBlobUrl] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  // Auto-detect RTL for text animation direction
+  const isLyricsRTL = detectLyricsRTL(songData);
+
   // Configuration State
   const [config, setConfig] = useState<ExportConfig>({
     orientation: "landscape",
@@ -71,6 +97,20 @@ export const VideoExportModal: React.FC<VideoExportModalProps> = ({
     contentMode: contentMode,
     transitionType: "dissolve",
     transitionDuration: 1.5,
+    visualizerConfig: {
+      enabled: true,
+      opacity: 0.15,
+      maxHeightRatio: 0.25,
+      zIndex: 1,
+      barWidth: 3,
+      barGap: 2,
+      colorScheme: "cyan-purple",
+    },
+    textAnimationConfig: {
+      revealDirection: isLyricsRTL ? "rtl" : "ltr", // Auto-detect based on lyrics
+      revealDuration: 0.3,
+      wordReveal: true,
+    },
   });
   const [isExporting, setIsExporting] = useState(false);
   const [useCloudRender, setUseCloudRender] = useState(false);
@@ -490,6 +530,148 @@ export const VideoExportModal: React.FC<VideoExportModalProps> = ({
                       setConfig({ ...config, fadeOutBeforeCut: checked })
                     }
                   />
+                </div>
+
+                {/* NEW: Visualizer Settings */}
+                <div className="space-y-4 pt-4 border-t border-border/50">
+                  <div className="flex items-center justify-between">
+                    <Label className="text-muted-foreground flex items-center gap-2">
+                      <Activity className="w-4 h-4" /> Audio Visualizer
+                    </Label>
+                    <Switch
+                      checked={config.visualizerConfig?.enabled}
+                      onCheckedChange={(checked) =>
+                        setConfig({
+                          ...config,
+                          visualizerConfig: {
+                            ...config.visualizerConfig!,
+                            enabled: checked,
+                          },
+                        })
+                      }
+                    />
+                  </div>
+
+                  {config.visualizerConfig?.enabled && (
+                    <div className="space-y-4 pl-6">
+                      <div className="space-y-2">
+                        <div className="flex justify-between">
+                          <span className="text-[10px] text-muted-foreground uppercase">Opacity</span>
+                          <span className="text-[10px] font-mono">{Math.round(config.visualizerConfig.opacity * 100)}%</span>
+                        </div>
+                        <Slider
+                          min={0.05}
+                          max={0.5}
+                          step={0.01}
+                          value={[config.visualizerConfig.opacity]}
+                          onValueChange={([val]) =>
+                            setConfig({
+                              ...config,
+                              visualizerConfig: { ...config.visualizerConfig!, opacity: val },
+                            })
+                          }
+                        />
+                      </div>
+
+                      <div className="space-y-2">
+                        <div className="flex justify-between">
+                          <span className="text-[10px] text-muted-foreground uppercase">Max Height</span>
+                          <span className="text-[10px] font-mono">{Math.round(config.visualizerConfig.maxHeightRatio * 100)}%</span>
+                        </div>
+                        <Slider
+                          min={0.1}
+                          max={0.5}
+                          step={0.05}
+                          value={[config.visualizerConfig.maxHeightRatio]}
+                          onValueChange={([val]) =>
+                            setConfig({
+                              ...config,
+                              visualizerConfig: { ...config.visualizerConfig!, maxHeightRatio: val },
+                            })
+                          }
+                        />
+                      </div>
+
+                      <div className="space-y-2">
+                        <span className="text-[10px] text-muted-foreground uppercase block mb-1">Color Scheme</span>
+                        <div className="grid grid-cols-3 gap-2">
+                          {(["cyan-purple", "rainbow", "monochrome"] as const).map((scheme) => (
+                            <Button
+                              key={scheme}
+                              variant="outline"
+                              size="sm"
+                              className={cn(
+                                "text-[10px] h-7 px-2",
+                                config.visualizerConfig?.colorScheme === scheme && "border-primary bg-primary/10"
+                              )}
+                              onClick={() =>
+                                setConfig({
+                                  ...config,
+                                  visualizerConfig: { ...config.visualizerConfig!, colorScheme: scheme },
+                                })
+                              }
+                            >
+                              {scheme.replace("-", " ")}
+                            </Button>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* NEW: Text Animation Settings */}
+                <div className="space-y-4 pt-4 border-t border-border/50">
+                  <Label className="text-muted-foreground flex items-center gap-2">
+                    <Type className="w-4 h-4" /> Text Reveal Animation
+                  </Label>
+
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-1.5">
+                      <span className="text-[10px] text-muted-foreground uppercase">Direction</span>
+                      <Select
+                        value={config.textAnimationConfig?.revealDirection}
+                        onValueChange={(val: any) =>
+                          setConfig({
+                            ...config,
+                            textAnimationConfig: { ...config.textAnimationConfig!, revealDirection: val },
+                          })
+                        }
+                      >
+                        <SelectTrigger className="h-8 text-xs">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="ltr">Left to Right</SelectItem>
+                          <SelectItem value="rtl">Right to Left</SelectItem>
+                          <SelectItem value="center-out">Center Out</SelectItem>
+                          <SelectItem value="center-in">Center In</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+
+                    <div className="space-y-1.5">
+                      <span className="text-[10px] text-muted-foreground uppercase">Speed (s)</span>
+                      <div className="flex items-center gap-2">
+                        <Slider
+                          min={0.1}
+                          max={1.0}
+                          step={0.1}
+                          value={[config.textAnimationConfig?.revealDuration || 0.3]}
+                          onValueChange={([val]) =>
+                            setConfig({
+                              ...config,
+                              textAnimationConfig: { ...config.textAnimationConfig!, revealDuration: val },
+                            })
+                          }
+                          className="flex-1"
+                        />
+                        <span className="text-[10px] font-mono w-6">
+                          {config.textAnimationConfig?.revealDuration}s
+                        </span>
+                      </div>
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>

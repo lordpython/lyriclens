@@ -10,10 +10,11 @@ import {
   generateMotionPrompt,
   VideoPurpose,
 } from "../services/geminiService";
-import { generatePromptsWithLangChain } from "../services/directorService";
+import { generatePromptsWithLangChain, runAnalyzer } from "../services/directorService";
 import { generatePromptsWithAgent } from "../services/agentDirectorService";
 import { animateImageWithDeApi } from "../services/deapiService";
 import { subtitlesToSRT } from "../utils/srtParser";
+import { calculateOptimalAssets } from "../services/assetCalculatorService";
 
 export function useLyricLens() {
   const [appState, setAppState] = useState<AppState>(AppState.IDLE);
@@ -77,7 +78,31 @@ export function useLyricLens() {
 
       setAppState(AppState.ANALYZING_LYRICS);
 
-      // 4. Generate Prompts using selected Director mode
+      // 4. NEW: Calculate optimal number of assets using dynamic asset calculator
+      // Get audio duration from the audio buffer
+      const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+      const arrayBuffer = await file.arrayBuffer();
+      const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+      const audioDuration = audioBuffer.duration;
+
+      // Run semantic analysis to understand content structure
+      const analysis = await runAnalyzer(
+        srt,
+        contentType === "story" ? "story" : "lyrics"
+      );
+
+      // Calculate optimal asset count based on duration and semantic analysis
+      const assetCalc = await calculateOptimalAssets({
+        audioDuration,
+        analysisOutput: analysis,
+        videoPurpose,
+        contentType: contentType === "story" ? "story" : "lyrics",
+      });
+
+      console.log(`[useLyricLens] Dynamic asset calculation: ${assetCalc.optimalAssetCount} assets recommended`);
+      console.log(`[useLyricLens] Reasoning: ${assetCalc.reasoning}`);
+
+      // 5. Generate Prompts using selected Director mode with calculated asset count
       // "chain" = LangChain LCEL pipeline (faster, deterministic)
       // "agent" = LangChain Agent with tools (smarter, self-improving)
       let prompts;
@@ -89,6 +114,7 @@ export function useLyricLens() {
           contentType === "story" ? "story" : "lyrics",
           videoPurpose,
           globalSubject,
+          { targetAssetCount: assetCalc.optimalAssetCount }
         );
       } else {
         console.log("[useLyricLens] Using Chain Director mode");
@@ -98,6 +124,7 @@ export function useLyricLens() {
           contentType === "story" ? "story" : "lyrics",
           videoPurpose,
           globalSubject,
+          { targetAssetCount: assetCalc.optimalAssetCount }
         );
       }
 

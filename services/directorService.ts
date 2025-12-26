@@ -26,7 +26,7 @@ export const AnalysisSchema = z.object({
     name: z.string().describe("Section name (e.g., Intro, Verse 1, Chorus)"),
     startTimestamp: z.string().describe("Start timestamp in MM:SS format"),
     endTimestamp: z.string().describe("End timestamp in MM:SS format"),
-    type: z.enum(["intro", "verse", "chorus", "bridge", "outro", "transition", "key_point", "conclusion"]),
+    type: z.enum(["intro", "verse", "pre-chorus", "chorus", "bridge", "outro", "transition", "key_point", "conclusion"]),
     emotionalIntensity: z.number().min(1).max(10).describe("Emotional intensity 1-10"),
   })),
   emotionalArc: z.object({
@@ -72,6 +72,8 @@ export interface DirectorConfig {
   temperature?: number;
   /** Maximum retry attempts on failure (defaults to 2) */
   maxRetries?: number;
+  /** NEW: Target number of prompts to generate (defaults to 10) */
+  targetAssetCount?: number;
 }
 
 // --- Default Configuration ---
@@ -80,6 +82,7 @@ const DEFAULT_CONFIG: Required<DirectorConfig> = {
   model: "gemini-2.0-flash",
   temperature: 0.7,
   maxRetries: 2,
+  targetAssetCount: 10, // Default fallback if not provided
 };
 
 // --- Error Types ---
@@ -170,7 +173,7 @@ function createAnalyzerTemplate(contentType: "lyrics" | "story"): ChatPromptTemp
 - Topic transitions`;
 
   const validTypes = contentType === "lyrics"
-    ? '"intro", "verse", "chorus", "bridge", "outro", "transition"'
+    ? '"intro", "verse", "pre-chorus", "chorus", "bridge", "outro", "transition"'
     : '"intro", "key_point", "transition", "conclusion"';
 
   return ChatPromptTemplate.fromMessages([
@@ -317,15 +320,15 @@ EMOTIONAL ARC GUIDANCE:
 - Peak scenes: Maximum emotion (dynamic angles, close-ups, action)
 - Resolution scenes: Wind down (pull back, contemplative)
 
-CRITICAL REQUIREMENT: You MUST generate EXACTLY 10 prompts. Not 7, not 6, but exactly 10 prompts that follow the emotional arc from the analysis.
+CRITICAL REQUIREMENT: You MUST generate EXACTLY {targetAssetCount} prompts. Not 7, not 6, but exactly {targetAssetCount} prompts that follow the emotional arc from the analysis.
 
 OUTPUT FORMAT:
-Return a valid JSON object (no markdown code blocks) with a "prompts" array containing exactly 10 objects.
+Return a valid JSON object (no markdown code blocks) with a "prompts" array containing exactly {targetAssetCount} objects.
 Each prompt object must have:
 - "text": detailed visual prompt (60-120 words) starting with a concrete subject
 - "mood": emotional tone of the scene
 - "timestamp": timestamp in MM:SS format matching the analysis sections`],
-    ["human", `Create the visual storyboard based on the analysis provided. Remember to generate exactly 10 prompts that follow the persona rules and include the concrete motifs literally.`],
+    ["human", `Create the visual storyboard based on the analysis provided. Remember to generate exactly {targetAssetCount} prompts that follow the persona rules and include the concrete motifs literally.`],
   ]);
 }
 
@@ -350,6 +353,7 @@ export async function runStoryboarder(
   globalSubject: string = "",
   config?: DirectorConfig
 ): Promise<StoryboardOutput> {
+  const targetAssetCount = config?.targetAssetCount || 10;
   const chain = createStoryboarderChain(config);
 
   // Get persona for this video purpose
@@ -393,6 +397,7 @@ Overall: ${styleData.mediumDescription}`;
     cameraAngles: CAMERA_ANGLES.join(", "),
     lightingMoods: LIGHTING_MOODS.join(", "),
     analysis: JSON.stringify(analysis, null, 2),
+    targetAssetCount,
   });
 
   return result;
@@ -466,6 +471,7 @@ Overall: ${styleData.mediumDescription}`;
         ? input.analysis.concreteMotifs.map(m => `- "${m.object}" (at ${m.timestamp}): ${m.emotionalContext}`).join('\n')
         : "No specific objects mentioned - create appropriate visual elements based on themes.";
 
+      const targetAssetCount = config?.targetAssetCount || 10;
       const result = await storyboarderChain.invoke({
         style: input.style,
         personaInstructions,
@@ -477,6 +483,7 @@ Overall: ${styleData.mediumDescription}`;
         cameraAngles: CAMERA_ANGLES.join(", "),
         lightingMoods: LIGHTING_MOODS.join(", "),
         analysis: JSON.stringify(input.analysis, null, 2),
+        targetAssetCount,
       });
 
       console.log("[Director] Storyboard complete:", result.prompts?.length, "prompts generated");

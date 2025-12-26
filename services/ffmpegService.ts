@@ -4,6 +4,7 @@ import { FFmpeg } from "@ffmpeg/ffmpeg";
 import { fetchFile, toBlobURL } from "@ffmpeg/util";
 import { applyPolyfills, isRTL } from "../lib/utils";
 import { isNative, isAndroid, isFFmpegWasmSupported, getRecommendedExportEngine } from "../utils/platformUtils";
+import { LAYOUT_PRESETS } from "../constants/layout";
 
 /**
  * Get the server URL based on the current platform
@@ -56,6 +57,24 @@ export interface ExportConfig {
   contentMode: "music" | "story"; // "story" disables audio visualizer
   transitionType: TransitionType; // Type of transition between scenes
   transitionDuration: number; // Duration in seconds (default: 1.5)
+
+  // NEW: Visualizer configuration
+  visualizerConfig?: {
+    enabled: boolean;
+    opacity: number; // 0.0-1.0, default: 0.15
+    maxHeightRatio: number; // 0.0-1.0, default: 0.25
+    zIndex: number; // layer order, default: 1 (behind text)
+    barWidth: number; // pixels, default: 3
+    barGap: number; // pixels, default: 2
+    colorScheme: "cyan-purple" | "rainbow" | "monochrome";
+  };
+
+  // NEW: Text animation configuration
+  textAnimationConfig?: {
+    revealDirection: "ltr" | "rtl" | "center-out" | "center-in";
+    revealDuration: number; // seconds, default: 0.3
+    wordReveal: boolean; // word-by-word or line-by-line
+  };
 }
 
 type RenderAsset = {
@@ -63,6 +82,271 @@ type RenderAsset = {
   type: "image" | "video";
   element: HTMLImageElement | HTMLVideoElement;
 };
+
+/**
+ * Get zone bounds from normalized coordinates
+ */
+function getZoneBounds(
+  zone: { x: number; y: number; width: number; height: number },
+  canvasWidth: number,
+  canvasHeight: number
+): { x: number; y: number; width: number; height: number } {
+  return {
+    x: zone.x * canvasWidth,
+    y: zone.y * canvasHeight,
+    width: zone.width * canvasWidth,
+    height: zone.height * canvasHeight,
+  };
+}
+
+/**
+ * Render content within a zone with clipping
+ */
+function renderInZone(
+  ctx: CanvasRenderingContext2D,
+  zone: { x: number; y: number; width: number; height: number },
+  canvasWidth: number,
+  canvasHeight: number,
+  renderFn: (bounds: { x: number; y: number; width: number; height: number }) => void
+): void {
+  const bounds = getZoneBounds(zone, canvasWidth, canvasHeight);
+
+  ctx.save();
+
+  // Clip to zone bounds
+  ctx.beginPath();
+  ctx.rect(bounds.x, bounds.y, bounds.width, bounds.height);
+  ctx.clip();
+
+  // Render content
+  renderFn(bounds);
+
+  ctx.restore();
+}
+
+/**
+ * Calculate word reveal progress for wipe animation
+ * Note: For RTL text, we no longer reverse indices - the rendering handles RTL positioning
+ */
+function calculateWordRevealProgress(
+  currentTime: number,
+  subtitle: { words?: { startTime: number; endTime: number; word: string }[] },
+  _isRTL: boolean // kept for API compatibility but no longer used for reversal
+): number[] {
+  if (!subtitle.words || subtitle.words.length === 0) {
+    return [1]; // Full reveal for non-word-timed
+  }
+
+  const revealDuration = 0.3; // 300ms per word
+  const progress: number[] = [];
+
+  subtitle.words.forEach((word, idx) => {
+    const wordStart = word.startTime;
+    const wordEnd = word.endTime;
+
+    // Use natural index - RTL positioning is handled in rendering
+    if (currentTime < wordStart) {
+      progress[idx] = 0;
+    } else if (currentTime >= wordEnd) {
+      progress[idx] = 1;
+    } else {
+      // In reveal window
+      progress[idx] = (currentTime - wordStart) / revealDuration;
+    }
+  });
+
+  return progress;
+}
+
+/**
+ * Render text with directional wipe animation
+ * Draws both inactive (ghost) and active (revealed) text with professional styling
+ */
+function renderTextWithWipe(
+  ctx: CanvasRenderingContext2D,
+  text: string,
+  x: number,
+  y: number,
+  fontSize: number,
+  progress: number, // 0-1 animation progress
+  revealDirection: NonNullable<ExportConfig["textAnimationConfig"]>["revealDirection"],
+  isTextRTL: boolean
+): void {
+  const textWidth = ctx.measureText(text).width;
+  const clipHeight = fontSize * 1.6;
+  const clipTop = y - clipHeight / 2;
+
+  // If text is RTL, force RTL unless caller explicitly chooses a center wipe.
+  const effectiveDirection =
+    (isTextRTL && (revealDirection === "ltr" || revealDirection === "rtl"))
+      ? "rtl"
+      : revealDirection;
+
+  const clamped = Math.max(0, Math.min(1, progress));
+
+  // First, draw the ghost (inactive) text - full width, dimmed
+  ctx.save();
+  ctx.shadowColor = "rgba(0, 0, 0, 0.8)";
+  ctx.shadowBlur = 10;
+  ctx.shadowOffsetY = 2;
+  ctx.strokeStyle = "rgba(0, 0, 0, 0.5)";
+  ctx.lineWidth = 3;
+  ctx.lineJoin = "round";
+  ctx.strokeText(text, x, y);
+  ctx.fillStyle = "rgba(255, 255, 255, 0.4)";
+  ctx.fillText(text, x, y);
+  ctx.restore();
+
+  // Then draw the revealed (active) text with clipping
+  if (clamped > 0) {
+    ctx.save();
+    ctx.beginPath();
+
+    if (effectiveDirection === "rtl") {
+      // RTL: Reveal from right to left
+      const revealWidth = textWidth * clamped;
+      ctx.rect(x + textWidth - revealWidth, clipTop, revealWidth, clipHeight);
+    } else if (effectiveDirection === "ltr") {
+      // LTR: Reveal from left to right
+      const revealWidth = textWidth * clamped;
+      ctx.rect(x, clipTop, revealWidth, clipHeight);
+    } else if (effectiveDirection === "center-out") {
+      // Center-out: expand from center
+      const revealWidth = textWidth * clamped;
+      const left = x + (textWidth - revealWidth) / 2;
+      ctx.rect(left, clipTop, revealWidth, clipHeight);
+    } else {
+      // center-in: shrink towards center (reverse feel)
+      const revealWidth = textWidth * (1 - clamped);
+      const left = x + (textWidth - revealWidth) / 2;
+      ctx.rect(left, clipTop, revealWidth, clipHeight);
+    }
+
+    ctx.clip();
+    
+    // Draw bright white revealed text with glow
+    ctx.shadowColor = "rgba(255, 215, 100, 0.8)";
+    ctx.shadowBlur = 15;
+    ctx.fillStyle = "#ffffff";
+    ctx.fillText(text, x, y);
+    ctx.restore();
+  }
+}
+
+/**
+ * Render refined visualizer layer with reduced opacity and constrained height
+ */
+function renderVisualizerLayer(
+  ctx: CanvasRenderingContext2D,
+  width: number,
+  height: number,
+  frequencyData: Uint8Array,
+  previousFrequencyData: Uint8Array | null,
+  config: NonNullable<ExportConfig["visualizerConfig"]>,
+  useModernEffects: boolean,
+  zone?: { top: number; height: number }
+): void {
+  const bufferLength = frequencyData.length;
+
+  const zoneTop = zone?.top ?? 0;
+  const zoneHeight = zone?.height ?? height;
+  const baselineY = zoneTop + zoneHeight;
+
+  const maxHeight = Math.min(zoneHeight, height * config.maxHeightRatio);
+  const barWidth = config.barWidth;
+  const barGap = config.barGap;
+
+  ctx.save();
+
+  // Hard clip to the visualizer zone so it never invades the lyric zone.
+  ctx.beginPath();
+  ctx.rect(0, zoneTop, width, zoneHeight);
+  ctx.clip();
+
+  // Set reduced opacity
+  ctx.globalAlpha = config.opacity;
+
+  // Create gradient based on color scheme
+  const gradient = ctx.createLinearGradient(0, baselineY, 0, baselineY - maxHeight);
+
+  switch (config.colorScheme) {
+    case "cyan-purple":
+      gradient.addColorStop(0, `rgba(34, 211, 238, ${config.opacity * 0.5})`);
+      gradient.addColorStop(0.5, `rgba(34, 211, 238, ${config.opacity * 0.8})`);
+      gradient.addColorStop(1, `rgba(167, 139, 250, ${config.opacity})`);
+      break;
+    case "rainbow":
+      gradient.addColorStop(0, `rgba(255, 0, 0, ${config.opacity})`);
+      gradient.addColorStop(0.2, `rgba(255, 165, 0, ${config.opacity})`);
+      gradient.addColorStop(0.4, `rgba(255, 255, 0, ${config.opacity})`);
+      gradient.addColorStop(0.6, `rgba(0, 255, 0, ${config.opacity})`);
+      gradient.addColorStop(0.8, `rgba(0, 0, 255, ${config.opacity})`);
+      gradient.addColorStop(1, `rgba(128, 0, 128, ${config.opacity})`);
+      break;
+    case "monochrome":
+      gradient.addColorStop(0, `rgba(255, 255, 255, ${config.opacity * 0.3})`);
+      gradient.addColorStop(1, `rgba(255, 255, 255, ${config.opacity})`);
+      break;
+  }
+
+  ctx.fillStyle = gradient;
+
+  // Optional: subtle glow for modern effects
+  if (useModernEffects) {
+    ctx.shadowBlur = 8;
+    ctx.shadowColor = `rgba(34, 211, 238, ${config.opacity * 0.3})`;
+  }
+
+  // Render mirrored spectrum
+  const centerX = width / 2;
+
+  for (let i = 0; i < bufferLength; i++) {
+    let value = frequencyData[i];
+
+    if (previousFrequencyData) {
+      value = (value + previousFrequencyData[i]) / 2;
+    }
+
+    const barHeight = (value / 255) * maxHeight;
+
+    if (barHeight > 0) {
+      const offset = i * (barWidth + barGap);
+      const radius = barWidth / 2;
+
+      // Right side
+      ctx.beginPath();
+      if (useModernEffects) {
+        ctx.roundRect(
+          centerX + offset,
+          baselineY - barHeight,
+          barWidth,
+          barHeight,
+          [radius, radius, 0, 0]
+        );
+      } else {
+        ctx.rect(centerX + offset, baselineY - barHeight, barWidth, barHeight);
+      }
+      ctx.fill();
+
+      // Left side (mirrored)
+      ctx.beginPath();
+      if (useModernEffects) {
+        ctx.roundRect(
+          centerX - offset - barWidth,
+          baselineY - barHeight,
+          barWidth,
+          barHeight,
+          [radius, radius, 0, 0]
+        );
+      } else {
+        ctx.rect(centerX - offset - barWidth, baselineY - barHeight, barWidth, barHeight);
+      }
+      ctx.fill();
+    }
+  }
+
+  ctx.restore();
+}
 
 const renderFrameToCanvas = async (
   ctx: CanvasRenderingContext2D,
@@ -78,6 +362,18 @@ const renderFrameToCanvas = async (
   // 1. Background (Black)
   ctx.fillStyle = "#000";
   ctx.fillRect(0, 0, width, height);
+
+  // Layout zones (non-overlapping composition: subject/visual layer, lyrics, visualizer)
+  const layoutPreset =
+    config.orientation === "portrait"
+      ? LAYOUT_PRESETS.portrait
+      : LAYOUT_PRESETS.landscape;
+
+  const zones = {
+    visualizer: getZoneBounds(layoutPreset.zones.visualizer, width, height),
+    text: getZoneBounds(layoutPreset.zones.text, width, height),
+    translation: getZoneBounds(layoutPreset.zones.translation, width, height),
+  };
 
   // 2. Visual Layer with Ken Burns & Transitions
   let currentIndex = 0;
@@ -252,84 +548,18 @@ const renderFrameToCanvas = async (
     }
   }
 
-  // 3. Visualizer Layer (only for music mode)
-  if (frequencyData && config.contentMode === "music") {
-    const bufferLength = frequencyData.length;
-    const barWidth = (width / bufferLength) * 2.5;
-    let x = 0;
-
-    // Create gradient
-    const gradient = ctx.createLinearGradient(0, height, 0, height / 2);
-    gradient.addColorStop(0, "rgba(34, 211, 238, 0.2)"); // Cyan transparent bottom
-    gradient.addColorStop(0.5, "rgba(34, 211, 238, 0.6)"); // Cyan mid
-    gradient.addColorStop(1, "rgba(167, 139, 250, 0.8)"); // Purple top
-
-    ctx.save();
-    if (config.useModernEffects) {
-      // Add a glow effect
-      ctx.shadowBlur = 15;
-      ctx.shadowColor = "rgba(34, 211, 238, 0.5)";
-    }
-
-    ctx.fillStyle = gradient;
-
-    for (let i = 0; i < bufferLength; i++) {
-      let value = frequencyData[i];
-      if (config.useModernEffects && previousFrequencyData) {
-        // Smooth the data: Average with previous frame
-        value = (value + previousFrequencyData[i]) / 2;
-      }
-
-      // Non-linear scaling for better visuals (boost lows, dampen highs slightly)
-      const barHeight = (value / 255) * height * 0.6;
-
-      // Mirrored spectrum
-      const centerX = width / 2;
-      const offset = i * (barWidth + 2); // Increased gap slightly
-
-      const radius = barWidth / 2;
-
-      // Right side
-      if (barHeight > 0) {
-        ctx.beginPath();
-        if (config.useModernEffects) {
-          ctx.roundRect(
-            centerX + offset,
-            height - barHeight,
-            barWidth,
-            barHeight + 10,
-            [radius, radius, 0, 0],
-          );
-        } else {
-          ctx.rect(centerX + offset, height - barHeight, barWidth, barHeight);
-        }
-        ctx.fill();
-
-        // Left side
-        ctx.beginPath();
-        if (config.useModernEffects) {
-          ctx.roundRect(
-            centerX - offset - barWidth,
-            height - barHeight,
-            barWidth,
-            barHeight + 10,
-            [radius, radius, 0, 0],
-          );
-        } else {
-          ctx.rect(
-            centerX - offset - barWidth,
-            height - barHeight,
-            barWidth,
-            barHeight,
-          );
-        }
-        ctx.fill();
-      }
-
-      x += barWidth + 2;
-      if (x > width) break;
-    }
-    ctx.restore();
+  // 3. Visualizer Layer (refined with reduced opacity and constrained height)
+  if (frequencyData && config.contentMode === "music" && config.visualizerConfig?.enabled) {
+    renderVisualizerLayer(
+      ctx,
+      width,
+      height,
+      frequencyData,
+      previousFrequencyData,
+      config.visualizerConfig,
+      config.useModernEffects,
+      { top: zones.visualizer.y, height: zones.visualizer.height }
+    );
   }
 
   // 4. Gradient Overlay
@@ -378,10 +608,10 @@ const renderFrameToCanvas = async (
       Math.min(1, (adjustedTime - activeSub.startTime) / totalDuration),
     );
 
-    // Adjust font size based on orientation
-    const fontSize = config.orientation === "portrait" ? 48 : 64;
-    const fontWeight = config.useModernEffects ? "800" : "bold";
-    ctx.font = `${fontWeight} ${fontSize}px Inter, system-ui, sans-serif`;
+    // Adjust font size based on orientation - LARGER for professional look
+    const fontSize = config.orientation === "portrait" ? 72 : 84;
+    const fontWeight = config.useModernEffects ? "700" : "bold";
+    ctx.font = `${fontWeight} ${fontSize}px "Inter", "Segoe UI", "Arial", sans-serif`;
     ctx.textAlign = "left"; // Changed to left for word-level positioning
     ctx.textBaseline = "middle";
 
@@ -395,23 +625,19 @@ const renderFrameToCanvas = async (
       activeSub.words.length > 0;
 
     // Get display text (split by spaces if no word timing)
+    // For RTL: Keep original word order - canvas will handle RTL rendering
+    // We DON'T reverse words anymore - instead we set canvas direction
     let displayWords = hasWordTiming
       ? activeSub.words!.map((w) => w.word)
       : activeSub.text.split(" ");
-
-    // For RTL languages, reverse the display order for proper rendering
-    // (Canvas renders LTR by default, so we need to reverse for RTL)
-    if (isTextRTL) {
-      displayWords = [...displayWords].reverse();
-    }
 
     // Measure total line width
     const fullText = displayWords.join(" ");
     const totalWidth = ctx.measureText(fullText).width;
     const startX = (width - totalWidth) / 2;
 
-    // Text wrapping for long lines
-    const maxWidth = width - (config.orientation === "portrait" ? 80 : 200);
+    // Text wrapping for long lines (constrained to the lyric zone)
+    const maxWidth = zones.text.width - (config.orientation === "portrait" ? 80 : 140);
     const wrappedLines: { words: string[]; wordIndices: number[] }[] = [];
     let currentLine: string[] = [];
     let currentLineIndices: number[] = [];
@@ -442,41 +668,47 @@ const renderFrameToCanvas = async (
 
     const lineHeight = fontSize * 1.3;
     const totalTextHeight = wrappedLines.length * lineHeight;
-    const baseY =
-      height / 2 -
-      totalTextHeight / 2 -
-      (config.orientation === "portrait" ? 100 : 0);
+    // Center lyrics inside the dedicated text zone (prevents overlap with visualizer)
+    const baseY = zones.text.y + zones.text.height / 2 - totalTextHeight / 2;
 
     wrappedLines.forEach((lineData, lineIdx) => {
       const yPos = baseY + lineIdx * lineHeight;
 
-      // For RTL, reverse words back for display but keep indices for progress calculation
-      const displayLineWords = isTextRTL
-        ? [...lineData.words].reverse()
-        : lineData.words;
-      const displayLineIndices = isTextRTL
-        ? [...lineData.wordIndices].reverse()
-        : lineData.wordIndices;
+      // For RTL text, we render words in their natural order
+      // but position them from right to left
+      const displayLineWords = lineData.words;
+      const displayLineIndices = lineData.wordIndices;
 
       const lineText = displayLineWords.join(" ");
       const lineWidth = ctx.measureText(lineText).width;
-      let xPos = (width - lineWidth) / 2;
+      
+      // For RTL: start from right side and move left
+      // For LTR: start from left side and move right
+      let xPos: number;
+      if (isTextRTL) {
+        // Start from right edge of centered text
+        xPos = zones.text.x + (zones.text.width + lineWidth) / 2;
+      } else {
+        xPos = zones.text.x + (zones.text.width - lineWidth) / 2;
+      }
 
       displayLineWords.forEach((word, wordIdx) => {
         const globalWordIdx = displayLineIndices[wordIdx];
         const wordWidth = ctx.measureText(word).width;
         const spaceWidth = ctx.measureText(" ").width;
 
+        // For RTL, move xPos to the left before drawing
+        if (isTextRTL) {
+          xPos -= wordWidth;
+        }
+
         // Calculate word progress
         let wordProgress = 0;
         let isActiveWord = false;
         let wordDuration = 0;
 
-        // For RTL text, we need to map the display index to the original timing index
-        // The words are reversed for display, so we need to reverse the timing lookup
-        const timingWordIdx = isTextRTL
-          ? (activeSub.words?.length || displayWords.length) - 1 - globalWordIdx
-          : globalWordIdx;
+        // Use the original word index for timing lookup (no reversal needed)
+        const timingWordIdx = globalWordIdx;
 
         if (hasWordTiming && activeSub.words![timingWordIdx]) {
           const wordTiming = activeSub.words![timingWordIdx];
@@ -487,7 +719,13 @@ const renderFrameToCanvas = async (
           if (adjustedTime >= wordEnd) {
             wordProgress = 1;
           } else if (adjustedTime >= wordStart) {
-            wordProgress = (adjustedTime - wordStart) / (wordEnd - wordStart);
+            const revealDuration =
+              config.textAnimationConfig?.revealDuration ?? (wordEnd - wordStart);
+            const revealWindow = Math.max(
+              0.05,
+              Math.min(revealDuration, wordEnd - wordStart)
+            );
+            wordProgress = (adjustedTime - wordStart) / revealWindow;
             isActiveWord = true;
           }
         } else {
@@ -497,10 +735,8 @@ const renderFrameToCanvas = async (
             : activeSub.text.split(" ");
           const originalFullText = originalWords.join(" ");
 
-          // For RTL, use the timing index which is already mapped correctly
-          const originalIdx = isTextRTL
-            ? originalWords.length - 1 - globalWordIdx
-            : globalWordIdx;
+          // Use the global word index directly (no reversal needed)
+          const originalIdx = globalWordIdx;
 
           const charsBefore = originalWords
             .slice(0, originalIdx)
@@ -519,8 +755,20 @@ const renderFrameToCanvas = async (
           }
         }
 
-        if (config.useModernEffects) {
-          // Modern effects: word-by-word glow
+        // NEW: Use wipe animation if textAnimationConfig is provided
+        if (config.textAnimationConfig) {
+          renderTextWithWipe(
+            ctx,
+            word,
+            xPos,
+            yPos,
+            fontSize,
+            wordProgress,
+            config.textAnimationConfig.revealDirection,
+            isTextRTL
+          );
+        } else if (config.useModernEffects) {
+          // Modern effects: word-by-word glow with professional styling
           ctx.save();
 
           // Emphasis effect for held words (words sung longer than average)
@@ -528,18 +776,25 @@ const renderFrameToCanvas = async (
           let emphasisGlow = false;
           if (isActiveWord && hasWordTiming && wordDuration > 0.5) {
             // Long word - add emphasis
-            emphasisScale = 1.0 + wordProgress * 0.08; // Subtle scale
+            emphasisScale = 1.0 + wordProgress * 0.06; // Subtle scale
             emphasisGlow = true;
           }
 
-          // Apply shadow for all text
-          ctx.shadowColor = "rgba(0,0,0,0.8)";
-          ctx.shadowBlur = 20;
-          ctx.shadowOffsetY = 4;
+          // Strong text shadow for readability
+          ctx.shadowColor = "rgba(0, 0, 0, 0.9)";
+          ctx.shadowBlur = 12;
+          ctx.shadowOffsetX = 2;
+          ctx.shadowOffsetY = 3;
 
-          // Draw ghost (inactive) text
-          ctx.fillStyle = "rgba(255, 255, 255, 0.25)";
+          // Draw outline/stroke for better visibility
+          ctx.strokeStyle = "rgba(0, 0, 0, 0.6)";
+          ctx.lineWidth = 4;
+          ctx.lineJoin = "round";
           ctx.textAlign = "left";
+          ctx.strokeText(word, xPos, yPos);
+
+          // Draw ghost (inactive) text - brighter for better visibility
+          ctx.fillStyle = "rgba(255, 255, 255, 0.45)";
           ctx.fillText(word, xPos, yPos);
 
           // Draw active text with gradient
@@ -551,26 +806,47 @@ const renderFrameToCanvas = async (
               ctx.translate(-(xPos + wordWidth / 2), -yPos);
             }
 
-            const gradient = ctx.createLinearGradient(
-              xPos,
-              0,
-              xPos + wordWidth,
-              0,
-            );
-            gradient.addColorStop(0, "#ffffff");
-            gradient.addColorStop(Math.max(0, wordProgress - 0.1), "#ffffff");
-            gradient.addColorStop(
-              Math.min(1, wordProgress + 0.1),
-              "rgba(255,255,255,0)",
-            );
-            gradient.addColorStop(1, "rgba(255,255,255,0)");
+            // For RTL text, gradient should reveal from right to left
+            // For LTR text, gradient reveals from left to right
+            let gradient: CanvasGradient;
+            if (isTextRTL) {
+              // RTL: gradient goes from right (white) to left (transparent)
+              gradient = ctx.createLinearGradient(
+                xPos + wordWidth,
+                0,
+                xPos,
+                0,
+              );
+              gradient.addColorStop(0, "#ffffff");
+              gradient.addColorStop(Math.max(0, wordProgress - 0.05), "#ffffff");
+              gradient.addColorStop(
+                Math.min(1, wordProgress + 0.05),
+                "rgba(255,255,255,0)",
+              );
+              gradient.addColorStop(1, "rgba(255,255,255,0)");
+            } else {
+              // LTR: gradient goes from left (white) to right (transparent)
+              gradient = ctx.createLinearGradient(
+                xPos,
+                0,
+                xPos + wordWidth,
+                0,
+              );
+              gradient.addColorStop(0, "#ffffff");
+              gradient.addColorStop(Math.max(0, wordProgress - 0.05), "#ffffff");
+              gradient.addColorStop(
+                Math.min(1, wordProgress + 0.05),
+                "rgba(255,255,255,0)",
+              );
+              gradient.addColorStop(1, "rgba(255,255,255,0)");
+            }
 
             ctx.fillStyle = gradient;
 
-            // Enhanced glow for active word
+            // Enhanced glow for active word - golden/warm glow
             if (isActiveWord || emphasisGlow) {
-              ctx.shadowColor = "rgba(34, 211, 238, 0.8)";
-              ctx.shadowBlur = emphasisGlow ? 40 : 25;
+              ctx.shadowColor = "rgba(255, 215, 100, 0.9)";
+              ctx.shadowBlur = emphasisGlow ? 30 : 20;
             }
 
             ctx.fillText(word, xPos, yPos);
@@ -579,57 +855,92 @@ const renderFrameToCanvas = async (
 
           ctx.restore();
         } else {
-          // Simple mode: solid color transition
-          if (wordProgress >= 1) {
-            ctx.fillStyle = "#22d3ee"; // cyan-400
-          } else if (wordProgress > 0) {
-            // Partially active
-            ctx.fillStyle = "#67e8f9"; // cyan-300
-          } else {
-            ctx.fillStyle = "#94a3b8"; // slate-400
-          }
+          // Simple mode: solid color transition with professional colors
+          ctx.save();
+          
+          // Add text shadow for readability
+          ctx.shadowColor = "rgba(0, 0, 0, 0.8)";
+          ctx.shadowBlur = 8;
+          ctx.shadowOffsetY = 2;
+          
+          // Draw outline
+          ctx.strokeStyle = "rgba(0, 0, 0, 0.5)";
+          ctx.lineWidth = 3;
+          ctx.lineJoin = "round";
           ctx.textAlign = "left";
+          ctx.strokeText(word, xPos, yPos);
+          
+          if (wordProgress >= 1) {
+            ctx.fillStyle = "#ffffff"; // Pure white for completed words
+          } else if (wordProgress > 0) {
+            // Partially active - bright yellow/gold
+            ctx.fillStyle = "#ffd700";
+          } else {
+            ctx.fillStyle = "rgba(255, 255, 255, 0.7)"; // Brighter inactive text
+          }
           ctx.fillText(word, xPos, yPos);
+          ctx.restore();
         }
 
-        xPos += wordWidth + spaceWidth;
+        // Update xPos for next word
+        // For RTL: subtract space (we already subtracted wordWidth before drawing)
+        // For LTR: add word width and space
+        if (isTextRTL) {
+          xPos -= spaceWidth;
+        } else {
+          xPos += wordWidth + spaceWidth;
+        }
       });
     });
 
     // Translation
     if (activeSub.translation) {
-      const transY = baseY + wrappedLines.length * lineHeight + 40;
+      const transY = zones.translation.y + zones.translation.height / 2;
       ctx.textAlign = "center";
 
       // Check if translation is RTL
       const isTranslationRTL = isRTL(activeSub.translation);
 
       if (config.useModernEffects) {
-        ctx.font = "500 28px Inter, system-ui, sans-serif";
+        // Larger, more readable translation text
+        const transFontSize = config.orientation === "portrait" ? 36 : 42;
+        ctx.font = `500 ${transFontSize}px "Inter", "Segoe UI", "Arial", sans-serif`;
         const transText = activeSub.translation;
         const transWidth = ctx.measureText(transText).width;
-        const padding = 24;
+        const padding = 32;
 
-        // Pill Background
+        // Elegant pill background with blur effect
         ctx.shadowBlur = 0;
-        ctx.fillStyle = "rgba(15, 23, 42, 0.6)";
+        ctx.fillStyle = "rgba(0, 0, 0, 0.5)";
         ctx.beginPath();
         ctx.roundRect(
           width / 2 - transWidth / 2 - padding,
-          transY - 20,
+          transY - transFontSize / 2 - 8,
           transWidth + padding * 2,
-          40,
-          20,
+          transFontSize + 16,
+          24,
         );
         ctx.fill();
 
-        ctx.fillStyle = "#67e8f9";
+        // Bright, readable translation text
+        ctx.shadowColor = "rgba(0, 0, 0, 0.5)";
+        ctx.shadowBlur = 4;
+        ctx.fillStyle = "#ffffff";
         ctx.fillText(transText, width / 2, transY + 2);
       } else {
-        ctx.font = "italic 32px Inter, Arial, sans-serif";
-        ctx.fillStyle = "#a5f3fc";
-        ctx.shadowColor = "rgba(0,0,0,0.8)";
-        ctx.shadowBlur = 4;
+        // Simple mode - still professional
+        const transFontSize = config.orientation === "portrait" ? 32 : 38;
+        ctx.font = `italic ${transFontSize}px "Inter", "Arial", sans-serif`;
+        ctx.shadowColor = "rgba(0, 0, 0, 0.9)";
+        ctx.shadowBlur = 8;
+        ctx.shadowOffsetY = 2;
+        
+        // Draw outline for readability
+        ctx.strokeStyle = "rgba(0, 0, 0, 0.6)";
+        ctx.lineWidth = 3;
+        ctx.strokeText(activeSub.translation, width / 2, transY);
+        
+        ctx.fillStyle = "rgba(255, 255, 255, 0.9)";
         ctx.fillText(activeSub.translation, width / 2, transY);
         ctx.shadowBlur = 0;
       }
@@ -651,6 +962,22 @@ export const exportVideoWithFFmpeg = async (
     contentMode: "music",
     transitionType: "dissolve",
     transitionDuration: 1.5,
+    // NEW: Default visualizer configuration
+    visualizerConfig: {
+      enabled: true,
+      opacity: 0.15,
+      maxHeightRatio: 0.25,
+      zIndex: 1,
+      barWidth: 3,
+      barGap: 2,
+      colorScheme: "cyan-purple",
+    },
+    // NEW: Default text animation configuration
+    textAnimationConfig: {
+      revealDirection: "ltr",
+      revealDuration: 0.3,
+      wordReveal: true,
+    },
   },
 ): Promise<Blob> => {
   const WIDTH = config.orientation === "landscape" ? 1920 : 1080;
@@ -877,6 +1204,22 @@ export const exportVideoClientSide = async (
     contentMode: "music",
     transitionType: "dissolve",
     transitionDuration: 1.5,
+    // NEW: Default visualizer configuration
+    visualizerConfig: {
+      enabled: true,
+      opacity: 0.15,
+      maxHeightRatio: 0.25,
+      zIndex: 1,
+      barWidth: 3,
+      barGap: 2,
+      colorScheme: "cyan-purple",
+    },
+    // NEW: Default text animation configuration
+    textAnimationConfig: {
+      revealDirection: "ltr",
+      revealDuration: 0.3,
+      wordReveal: true,
+    },
   },
 ): Promise<Blob> => {
   const WIDTH = config.orientation === "landscape" ? 1920 : 1080;
