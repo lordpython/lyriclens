@@ -1,0 +1,17 @@
+{
+	"appId": "com.lyriclens.app",
+	"appName": "LyricLens",
+	"webDir": "dist",
+	"server": {
+		"androidScheme": "https"
+	},
+	"plugins": {
+		"Filesystem": {}
+	},
+	"android": {
+		"allowMixedContent": true
+	},
+	"ios": {
+		"contentInset": "automatic"
+	}
+}
