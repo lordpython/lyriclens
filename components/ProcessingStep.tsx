@@ -10,14 +10,23 @@ interface ProcessingStepProps {
 
 export const ProcessingStep: React.FC<ProcessingStepProps> = ({ currentStep }) => {
   const steps = [
-    { id: AppState.PROCESSING_AUDIO, label: 'Transcribing Audio' },
-    { id: AppState.ANALYZING_LYRICS, label: 'Creating Visual Prompts' },
+    { id: AppState.PROCESSING_AUDIO, label: 'Preparing audio...' },
+    { id: AppState.TRANSCRIBING, label: 'Transcribing audio...' },
+    { id: AppState.ANALYZING_LYRICS, label: 'Analyzing content...' },
+    { id: AppState.GENERATING_PROMPTS, label: 'Generating visual prompts...' },
   ];
 
   // Helper to determine step status
   const getStatus = (stepId: AppState) => {
-    // Define order
-    const order = [AppState.IDLE, AppState.PROCESSING_AUDIO, AppState.ANALYZING_LYRICS, AppState.READY];
+    // Define order with new granular states
+    const order = [
+      AppState.IDLE,
+      AppState.PROCESSING_AUDIO,
+      AppState.TRANSCRIBING,
+      AppState.ANALYZING_LYRICS,
+      AppState.GENERATING_PROMPTS,
+      AppState.READY
+    ];
     const currentIndex = order.indexOf(currentStep);
     const stepIndex = order.indexOf(stepId);
 

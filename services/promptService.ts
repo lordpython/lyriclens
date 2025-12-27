@@ -184,7 +184,6 @@ export function lintPrompt(params: {
 
     // Common subject synonyms to avoid false positives for "person"
     const personSynonyms = ["person", "figure", "character", "individual", "man", "woman", "human", "someone", "somebody"];
-    const subjectIsPerson = subjectTokens.some(t => personSynonyms.includes(t));
 
     // Check if prompt contains any of the important subject tokens
     const foundTokens = subjectTokens.filter(t => {

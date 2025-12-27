@@ -9,7 +9,7 @@ interface IntroAnimationProps {
 
 export const IntroAnimation: React.FC<IntroAnimationProps> = ({ 
   onComplete, 
-  duration = 4000 
+  duration = 2000 // Shortened from 4000ms for faster start
 }) => {
   const [showSubtitle, setShowSubtitle] = useState(false);
   const [particles] = useState(() => 

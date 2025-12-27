@@ -26,22 +26,22 @@ ${mockStoryboardJSON}
 
 const mockResponseWithStatus = "The storyboard has a quality score of 100, which meets the quality threshold. The storyboard JSON is complete.";
 
-function testStoryboardExtraction() {
+async function testStoryboardExtraction() {
   console.log('🧪 Testing storyboard extraction fix...');
   
   // Test 1: Extract from plain JSON
   console.log('Test 1: Plain JSON extraction');
-  const result1 = extractStoryboardFromContent(mockStoryboardJSON);
+  const result1 = await extractStoryboardFromContent(mockStoryboardJSON);
   console.log('✅ Plain JSON:', result1 ? `${result1.prompts.length} prompts` : 'null');
   
   // Test 2: Extract from code block
   console.log('Test 2: Code block extraction');
-  const result2 = extractStoryboardFromContent(mockStoryboardInCodeBlock);
+  const result2 = await extractStoryboardFromContent(mockStoryboardInCodeBlock);
   console.log('✅ Code block:', result2 ? `${result2.prompts.length} prompts` : 'null');
   
   // Test 3: Extract from status message (should fail gracefully)
   console.log('Test 3: Status message extraction');
-  const result3 = extractStoryboardFromContent(mockResponseWithStatus);
+  const result3 = await extractStoryboardFromContent(mockResponseWithStatus);
   console.log('✅ Status message:', result3 ? `${result3.prompts.length} prompts` : 'null (expected)');
   
   // Test 4: Convert to ImagePrompts

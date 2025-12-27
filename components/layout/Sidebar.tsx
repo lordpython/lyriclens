@@ -90,15 +90,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
       </div>
 
       <ScrollArea className="flex-1 py-6 px-4">
-        {/* Only show full sidebar controls when project is ready (post-wizard) */}
-        {appState === AppState.READY ? (
-          <div className="space-y-6">
-            {/* Section: Configuration */}
-            <div className="space-y-4">
-              <h3 className="text-[10px] font-semibold text-muted-foreground uppercase tracking-widest px-2 flex items-center gap-2">
-                <Settings2 size={12} className="text-primary/60" />
-                Project Config
-              </h3>
+        {/* Show sidebar controls in all states for progressive disclosure */}
+        <div className="space-y-6">
+          {/* Section: Configuration */}
+          <div className="space-y-4">
+            <h3 className="text-[10px] font-semibold text-muted-foreground uppercase tracking-widest px-2 flex items-center gap-2">
+              <Settings2 size={12} className="text-primary/60" />
+              Settings
+            </h3>
 
               {/* Mode */}
               <div className="space-y-2">
@@ -338,13 +337,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
               </motion.div>
             )}
           </div>
-        ) : (
-          /* Empty state or minimal info when not ready */
-          <div className="h-full flex flex-col items-center justify-center text-center p-4 text-muted-foreground/50">
-            <Settings2 size={48} className="mb-4 opacity-20" />
-            <p className="text-xs uppercase tracking-widest">Awaiting Configuration</p>
-          </div>
-        )}
       </ScrollArea>
 
       {/* Footer */}

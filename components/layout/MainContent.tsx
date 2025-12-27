@@ -1,11 +1,8 @@
-import React, { Suspense, lazy } from "react";
+import React from "react";
 import {
-  Music,
   Wand2,
   Loader2,
   Sparkles,
-  LayoutDashboard,
-  ChevronRight,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -16,24 +13,18 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { motion, AnimatePresence } from "framer-motion";
-import { AppState, SongData, AssetType } from "../../types";
+import { AppState, SongData, AssetType, GeneratedImage, ImagePrompt } from "../../types";
 import { LANGUAGES } from "../../constants";
-import { FileUpload } from "../FileUpload";
+import { QuickUpload } from "../QuickUpload";
 import { ProcessingStep } from "../ProcessingStep";
 import { ImageGenerator } from "../ImageGenerator";
 import { TimelinePlayer } from "../TimelinePlayer";
 import { TranscriptList } from "../TranscriptList";
 
-// Lazy load heavy components
-const ConfigurationWizard = lazy(() =>
-  import("../ConfigurationWizard").then((m) => ({ default: m.ConfigurationWizard }))
-);
-
 export interface MainContentProps {
   appState: AppState;
   songData: SongData | null;
   errorMsg: string;
-  pendingFile: File | null;
   isBulkGenerating: boolean;
   isTranslating: boolean;
   selectedStyle: string;
@@ -47,38 +38,23 @@ export interface MainContentProps {
   duration: number;
   contentType: "music" | "story";
   videoPurpose: string;
-  artStyles: readonly string[];
-  videoPurposes: Array<{ value: string; label: string; description: string }>;
-  onFileSelect: (file: File) => void;
-  onConfigComplete: () => void;
-  onConfigCancel: () => void;
-  onImageGenerated: (promptId: string, imageUrl: string, type?: "image" | "video") => void;
+  onQuickStart: (file: File, aspectRatio: string) => void;
+  onLoadDemo: (aspectRatio: string) => void;
+  onImageGenerated: (img: GeneratedImage) => void;
   onGenerateAll: () => void;
   onTranslate: () => void;
   onAssetTypeChange: (promptId: string, assetType: AssetType) => void;
-  onLoadTestData: () => void;
   onPlayStateChange: (playing: boolean) => void;
   onTimeUpdate: (time: number) => void;
   onDurationChange: (duration: number) => void;
   onTargetLangChange: (lang: string) => void;
   onReset: () => void;
-  // Configuration wizard props
-  setContentType: (type: "music" | "story") => void;
-  setVideoPurpose: (purpose: string) => void;
-  setAspectRatio: (ratio: string) => void;
-  setGenerationMode: (mode: "image" | "video") => void;
-  setVideoProvider: (provider: "veo" | "deapi") => void;
-  directorMode: "chain" | "agent";
-  setDirectorMode: (mode: "chain" | "agent") => void;
-  setGlobalSubject: (subject: string) => void;
-  setSelectedStyle: (style: string) => void;
 }
 
 export const MainContent: React.FC<MainContentProps> = ({
   appState,
   songData,
   errorMsg,
-  pendingFile,
   isBulkGenerating,
   isTranslating,
   selectedStyle,
@@ -91,202 +67,28 @@ export const MainContent: React.FC<MainContentProps> = ({
   currentTime,
   duration,
   contentType,
-  videoPurpose,
-  artStyles,
-  videoPurposes,
-  onFileSelect,
-  onConfigComplete,
-  onConfigCancel,
+  onQuickStart,
+  onLoadDemo,
   onImageGenerated,
   onGenerateAll,
   onTranslate,
   onAssetTypeChange,
-  onLoadTestData,
   onPlayStateChange,
   onTimeUpdate,
   onDurationChange,
   onTargetLangChange,
   onReset,
-  setContentType,
-  setVideoPurpose,
-  setAspectRatio,
-  setGenerationMode,
-  setVideoProvider,
-  directorMode,
-  setDirectorMode,
-  setGlobalSubject,
-  setSelectedStyle,
 }) => {
   return (
     <div className="flex-1 overflow-y-auto overflow-x-hidden p-4 md:p-6 w-full">
       <AnimatePresence mode="wait">
-        {/* STATE: IDLE */}
+        {/* STATE: IDLE - Quick Upload */}
         {appState === AppState.IDLE && (
-          <motion.div
-            key="idle"
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -20 }}
-            className="max-w-2xl mx-auto mt-6 md:mt-16 flex flex-col items-center text-center px-4"
-          >
-            {/* Hero Icon */}
-            <motion.div
-              className="mb-8 relative"
-              initial={{ scale: 0.8, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              transition={{ delay: 0.1, type: "spring", stiffness: 200 }}
-            >
-              <div className="absolute inset-0 bg-linear-to-r from-primary/30 via-accent/20 to-primary/30 blur-3xl rounded-full animate-pulse" />
-              <div className="absolute inset-0 bg-primary/10 blur-2xl rounded-full" />
-              <motion.div
-                className="relative glass-card p-8 rounded-3xl shadow-2xl"
-                whileHover={{ scale: 1.05, rotate: 2 }}
-                transition={{ type: "spring", stiffness: 300 }}
-              >
-                <div className="relative">
-                  <LayoutDashboard size={56} className="text-primary" />
-                  <motion.div
-                    className="absolute -top-1 -right-1"
-                    animate={{ rotate: [0, 15, -15, 0] }}
-                    transition={{
-                      duration: 2,
-                      repeat: Infinity,
-                      ease: "easeInOut",
-                    }}
-                  >
-                    <Sparkles size={20} className="text-accent" />
-                  </motion.div>
-                </div>
-              </motion.div>
-            </motion.div>
-
-            {/* Title */}
-            <motion.h1
-              className="text-4xl md:text-6xl font-bold text-foreground mb-4 tracking-tight"
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: 0.2 }}
-            >
-              Visualize Your <span className="gradient-text">Audio</span>
-            </motion.h1>
-
-            <motion.p
-              className="text-base md:text-lg text-muted-foreground mb-10 leading-relaxed max-w-lg"
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: 0.3 }}
-            >
-              Turn your music, stories, or podcasts into stunning
-              AI-generated videos with synchronized lyrics and visuals.
-            </motion.p>
-
-            {/* Upload Area */}
-            <motion.div
-              className="w-full max-w-lg space-y-6"
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: 0.4 }}
-            >
-              <FileUpload onFileSelect={onFileSelect} disabled={false} />
-
-              {/* Divider */}
-              <div className="relative py-2">
-                <div className="absolute inset-0 flex items-center">
-                  <span className="w-full border-t border-border/50"></span>
-                </div>
-                <div className="relative flex justify-center">
-                  <span className="bg-background px-4 text-xs text-muted-foreground uppercase tracking-wider">
-                    Or try demo
-                  </span>
-                </div>
-              </div>
-
-              {/* Demo Button */}
-              <motion.div
-                whileHover={{ scale: 1.02 }}
-                whileTap={{ scale: 0.98 }}
-              >
-                <Button
-                  onClick={onLoadTestData}
-                  variant="outline"
-                  className="w-full border-border/50 hover:border-primary/50 hover:bg-primary/5 h-12 group transition-all duration-300"
-                >
-                  <Music
-                    size={16}
-                    className="mr-2 text-primary group-hover:scale-110 transition-transform"
-                  />
-                  <span>Load Demo Track</span>
-                  <ChevronRight
-                    size={14}
-                    className="ml-2 text-muted-foreground group-hover:translate-x-1 transition-transform"
-                  />
-                </Button>
-              </motion.div>
-            </motion.div>
-
-            {/* Feature Pills */}
-            <motion.div
-              className="flex flex-wrap justify-center gap-3 mt-12"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              transition={{ delay: 0.6 }}
-            >
-              {[
-                "AI Transcription",
-                "Visual Storyboard",
-                "Video Export",
-              ].map((feature, i) => (
-                <motion.span
-                  key={feature}
-                  className="px-4 py-2 rounded-full bg-muted/50 text-muted-foreground text-xs font-medium border border-border/50"
-                  initial={{ opacity: 0, y: 10 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{ delay: 0.7 + i * 0.1 }}
-                  whileHover={{
-                    scale: 1.05,
-                    borderColor: "var(--primary)",
-                  }}
-                >
-                  {feature}
-                </motion.span>
-              ))}
-            </motion.div>
-          </motion.div>
-        )}
-
-        {/* STATE: CONFIGURING */}
-        {appState === AppState.CONFIGURING && pendingFile && (
-          <Suspense
-            fallback={
-              <div className="flex items-center justify-center h-64">
-                <Loader2 className="w-8 h-8 animate-spin text-primary" />
-              </div>
-            }
-          >
-            <ConfigurationWizard
-              fileName={pendingFile.name}
-              onComplete={onConfigComplete}
-              onCancel={onConfigCancel}
-              contentType={contentType}
-              setContentType={setContentType}
-              videoPurpose={videoPurpose}
-              setVideoPurpose={setVideoPurpose}
-              aspectRatio={aspectRatio}
-              setAspectRatio={setAspectRatio}
-              generationMode={generationMode}
-              setGenerationMode={setGenerationMode}
-              videoProvider={videoProvider}
-              setVideoProvider={setVideoProvider}
-              directorMode={directorMode}
-              setDirectorMode={setDirectorMode}
-              globalSubject={globalSubject}
-              setGlobalSubject={setGlobalSubject}
-              selectedStyle={selectedStyle}
-              setSelectedStyle={setSelectedStyle}
-              artStyles={artStyles}
-              videoPurposes={videoPurposes}
-            />
-          </Suspense>
+          <QuickUpload
+            onFileSelect={onQuickStart}
+            onLoadDemo={onLoadDemo}
+            disabled={false}
+          />
         )}
 
         {/* STATE: PROCESSING */}
@@ -342,9 +144,9 @@ export const MainContent: React.FC<MainContentProps> = ({
                   duration={duration}
                   isPlaying={isPlaying}
                   onPlayPause={() => onPlayStateChange(!isPlaying)}
-                  onSeek={(time) => onTimeUpdate(time)}
-                  onTimeUpdate={(time) => onTimeUpdate(time)}
-                  onDurationChange={(dur) => onDurationChange(dur)}
+                  onSeek={(time: number) => onTimeUpdate(time)}
+                  onTimeUpdate={(time: number) => onTimeUpdate(time)}
+                  onDurationChange={(dur: number) => onDurationChange(dur)}
                   onEnded={() => onPlayStateChange(false)}
                   contentMode={contentType}
                 />
@@ -386,7 +188,7 @@ export const MainContent: React.FC<MainContentProps> = ({
                 <TranscriptList
                   subtitles={songData.parsedSubtitles}
                   currentTime={currentTime}
-                  onSeek={(time) => {
+                  onSeek={(time: number) => {
                     onTimeUpdate(time);
                     onPlayStateChange(true);
                   }}
@@ -428,14 +230,9 @@ export const MainContent: React.FC<MainContentProps> = ({
               {/* Image Grid */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 {songData.prompts.map(
-                  (prompt: { id: string; text: string }, idx: number) => {
+                  (prompt: ImagePrompt, idx: number) => {
                     const existing = songData.generatedImages.find(
-                      (img: {
-                        promptId: string;
-                        imageUrl: string;
-                        type?: "image" | "video";
-                        baseImageUrl?: string;
-                      }) => img.promptId === prompt.id
+                      (img: GeneratedImage) => img.promptId === prompt.id
                     );
                     // Collect sibling prompt texts for cross-scene deduplication
                     const siblingPromptTexts = songData.prompts

@@ -8,6 +8,9 @@ export const API_KEY =
   process.env.API_KEY ||
   "";
 
+// Debug: Log API key info (first 10 chars only for security)
+console.log("[API Client] API Key loaded:", API_KEY ? `${API_KEY.substring(0, 10)}...` : "MISSING");
+
 export const MODELS = {
   TEXT: "gemini-3-flash-preview",
   IMAGE: "imagen-4.0-fast-generate-001",

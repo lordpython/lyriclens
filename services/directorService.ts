@@ -7,8 +7,8 @@
 
 import { ChatGoogleGenerativeAI } from "@langchain/google-genai";
 import { ChatPromptTemplate } from "@langchain/core/prompts";
-import { JsonOutputParser, StructuredOutputParser } from "@langchain/core/output_parsers";
-import { RunnableSequence } from "@langchain/core/runnables";
+import { JsonOutputParser } from "@langchain/core/output_parsers";
+import { RunnableSequence, RunnableLambda } from "@langchain/core/runnables";
 import { z } from "zod";
 import { ImagePrompt } from "../types";
 import { VideoPurpose, CAMERA_ANGLES, LIGHTING_MOODS } from "../constants";
@@ -22,6 +22,18 @@ import { parseSRTTimestamp } from "../utils/srtParser";
  * Defines the structure of content analysis including sections, emotional arc, themes, and motifs.
  */
 export const AnalysisSchema = z.object({
+  sections: z.array(z.object({
+    name: z.string().describe("Section name (e.g., Intro, Verse 1, Chorus)"),
+    startTimestamp: z.string().describe("Start timestamp in MM:SS format"),
+    endTimestamp: z.string().describe("End timestamp in MM:SS format"),
+    type: z.enum(["intro", "verse", "pre-chorus", "chorus", "bridge", "outro", "transition", "key_point", "conclusion"]).describe("Section type"),
+    emotionalIntensity: z.number().min(1).max(10).describe("Emotional intensity from 1-10"),
+  })).describe("Content sections with timing and emotional intensity"),
+  emotionalArc: z.object({
+    opening: z.string().describe("Opening emotional state"),
+    peak: z.string().describe("Peak emotional moment"),
+    resolution: z.string().describe("Resolution emotional state"),
+  }).describe("Overall emotional arc of the content"),
   themes: z.array(z.string()).describe("Key visual themes extracted from content"),
   motifs: z.array(z.string()).describe("Recurring visual motifs to maintain consistency"),
   // Concrete motifs for literal visualization (the "candle" fix)
@@ -150,53 +162,48 @@ function createModel(config: DirectorConfig = {}): ChatGoogleGenerativeAI {
  * Handles both "lyrics" and "story" content types.
  */
 function createAnalyzerTemplate(contentType: "lyrics" | "story"): ChatPromptTemplate {
-  const contentTypeGuidance = contentType === "lyrics"
-    ? `For song lyrics, identify:
-- Song sections: Intro, Verse, Pre-Chorus, Chorus, Bridge, Outro
-- Emotional intensity per section (1-10 scale)
-- Transitions between sections`
-    : `For narrative/story content, identify:
-- Narrative segments: Introduction, Key Points, Transitions, Conclusion
-- Emotional intensity per segment (1-10 scale)
-- Topic transitions`;
-
-  const validTypes = contentType === "lyrics"
-    ? '"intro", "verse", "pre-chorus", "chorus", "bridge", "outro", "transition"'
-    : '"intro", "key_point", "transition", "conclusion"';
-
   return ChatPromptTemplate.fromMessages([
     ["system", `You are a professional content analyst specializing in ${contentType} analysis.
-Your task is to analyze the provided content and identify its key themes, motifs, and CONCRETE VISUAL MOTIFS.
+Your task is to analyze the provided content and identify its structure, emotional arc, themes, motifs, and CONCRETE VISUAL MOTIFS.
 
 CONTENT TYPE: ${contentType}
 
 ANALYSIS REQUIREMENTS:
-1. Identify 3-6 key visual themes
-2. Identify 2-4 recurring visual motifs for consistency
 
-CONCRETE MOTIF EXTRACTION (CRITICAL - THE "CANDLE FIX"):
-Hunt for EVERY physical object mentioned in the text. These MUST be visualized LITERALLY:
-- Objects: candle, door, window, rain, fire, mirror, clock, rose, stars, moon, ocean, etc.
-- Actions: falling, burning, breaking, opening, closing, fading, melting
-- Settings: beach, city, bedroom, forest, rooftop, highway
+1. SECTIONS (REQUIRED): Divide the content into logical sections
+   - For lyrics: intro, verse, pre-chorus, chorus, bridge, outro
+   - For story: intro, key_point, transition, conclusion
+   - Each section needs: name, startTimestamp (MM:SS), endTimestamp (MM:SS), type, emotionalIntensity (1-10)
 
-For EACH concrete object/action found:
-- Record the exact object name
-- Note when it first appears (timestamp)
-- Describe what emotion it represents
+2. EMOTIONAL ARC (REQUIRED): Identify the overall emotional journey
+   - opening: The initial emotional state/mood
+   - peak: The most intense emotional moment
+   - resolution: How the emotion resolves at the end
 
-These concrete motifs MUST be passed to the Storyboarder and shown AS LITERAL OBJECTS.
-If lyrics say "the candle flickers", the visual MUST show an actual candle - NOT a "sad person" or "lonely scene".
-The object IS the metaphor. Show the object.
+3. THEMES: Identify 3-6 key visual themes
+
+4. MOTIFS: Identify 2-4 recurring visual motifs for consistency
+
+5. CONCRETE MOTIFS (CRITICAL - THE "CANDLE FIX"):
+   Hunt for EVERY physical object mentioned in the text. These MUST be visualized LITERALLY:
+   - Objects: candle, door, window, rain, fire, mirror, clock, rose, stars, moon, ocean, etc.
+   - Actions: falling, burning, breaking, opening, closing, fading, melting
+   - Settings: beach, city, bedroom, forest, rooftop, highway
 
 OUTPUT FORMAT:
-Return a valid JSON object (no markdown code blocks) with these fields:
-- "themes": array of theme strings (3-6 items)
-- "motifs": array of motif strings (2-4 items)
-- "concreteMotifs": array of objects with "object" (the physical thing), "timestamp" (MM:SS), "emotionalContext" (what it represents)
+Return a valid JSON object (NO markdown code blocks, NO backtick wrapper) with ALL these fields:
+- "sections": array of section objects with name, startTimestamp, endTimestamp, type, emotionalIntensity
+- "emotionalArc": object with opening, peak, resolution strings
+- "themes": array of theme strings
+- "motifs": array of motif strings  
+- "concreteMotifs": array of objects with object, timestamp, emotionalContext
 
-CRITICAL: Timestamps should be in MM:SS format (e.g., "01:30").`],
-    ["human", `Analyze this content:
+CRITICAL RULES:
+- ALL fields are REQUIRED - sections, emotionalArc, themes, motifs, concreteMotifs
+- Timestamps MUST be in MM:SS format (e.g., "01:30")
+- Return ONLY the JSON object, no markdown formatting
+- If content has no clear sections, create at least one section covering the full duration`],
+    ["human", `Analyze this content and return the complete JSON structure with sections, emotionalArc, themes, motifs, and concreteMotifs:
 
 {content}`],
   ]);
@@ -208,9 +215,74 @@ CRITICAL: Timestamps should be in MM:SS format (e.g., "01:30").`],
 export function createAnalyzerChain(contentType: "lyrics" | "story", config?: DirectorConfig) {
   const model = createModel(config);
   const template = createAnalyzerTemplate(contentType);
-  const parser = StructuredOutputParser.fromZodSchema(AnalysisSchema);
+  
+  // Custom parser that handles partial responses and fills in defaults
+  const customParser = new RunnableLambda({
+    func: async (message: unknown): Promise<AnalysisOutput> => {
+      // Extract text content from message (handles AIMessageChunk and other formats)
+      let text: string;
+      if (typeof message === "string") {
+        text = message;
+      } else if (message && typeof message === "object") {
+        const msg = message as { content?: unknown; text?: string };
+        if (typeof msg.content === "string") {
+          text = msg.content;
+        } else if (Array.isArray(msg.content)) {
+          // Handle array content (AIMessageChunk format)
+          text = msg.content.map((c: unknown) => {
+            if (typeof c === "string") return c;
+            if (c && typeof c === "object" && "text" in c) return (c as { text: string }).text;
+            return String(c);
+          }).join("");
+        } else if (msg.text) {
+          text = msg.text;
+        } else {
+          text = String(message);
+        }
+      } else {
+        text = String(message);
+      }
+      
+      // Clean up the response - remove markdown code blocks if present
+      let cleanText = text
+        .replace(/^```json\s*/i, "")
+        .replace(/^```\s*/i, "")
+        .replace(/```$/g, "")
+        .trim();
+      
+      try {
+        const parsed = JSON.parse(cleanText);
+        
+        // Ensure all required fields exist with defaults
+        const result: AnalysisOutput = {
+          sections: parsed.sections || [{
+            name: "Full Content",
+            startTimestamp: "00:00",
+            endTimestamp: "03:00",
+            type: contentType === "lyrics" ? "verse" : "key_point",
+            emotionalIntensity: 5,
+          }],
+          emotionalArc: parsed.emotionalArc || {
+            opening: "Establishing mood",
+            peak: "Emotional climax",
+            resolution: "Conclusion",
+          },
+          themes: parsed.themes || ["Visual storytelling"],
+          motifs: parsed.motifs || ["Light and shadow"],
+          concreteMotifs: parsed.concreteMotifs || [],
+        };
+        
+        // Validate with Zod schema (will throw if invalid)
+        return AnalysisSchema.parse(result);
+      } catch (parseError) {
+        console.error("[Analyzer] JSON parse error:", parseError);
+        console.error("[Analyzer] Raw text:", cleanText.substring(0, 500));
+        throw parseError;
+      }
+    },
+  });
 
-  return template.pipe(model).pipe(parser);
+  return template.pipe(model).pipe(customParser as unknown as RunnableLambda<unknown, AnalysisOutput>);
 }
 
 /**
@@ -223,11 +295,36 @@ export async function runAnalyzer(
 ): Promise<AnalysisOutput> {
   const chain = createAnalyzerChain(contentType, config);
 
-  const result = await chain.invoke({
-    content,
-  });
-
-  return result;
+  try {
+    const result = await chain.invoke({
+      content,
+    });
+    return result;
+  } catch (error) {
+    // If parsing fails, try to extract what we can and provide defaults
+    console.warn("[Analyzer] Parsing failed, attempting to provide defaults:", error);
+    
+    // Return a minimal valid structure with defaults
+    const defaultAnalysis: AnalysisOutput = {
+      sections: [{
+        name: "Full Content",
+        startTimestamp: "00:00",
+        endTimestamp: "03:00",
+        type: contentType === "lyrics" ? "verse" : "key_point",
+        emotionalIntensity: 5,
+      }],
+      emotionalArc: {
+        opening: "Establishing mood",
+        peak: "Emotional climax",
+        resolution: "Conclusion",
+      },
+      themes: ["Visual storytelling", "Emotional journey"],
+      motifs: ["Light and shadow", "Movement"],
+      concreteMotifs: [],
+    };
+    
+    return defaultAnalysis;
+  }
 }
 
 

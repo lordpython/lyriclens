@@ -18,8 +18,19 @@ console.warn = (...args) => {
 };
 
 export default defineConfig(({ mode }) => {
-  const env = loadEnv(mode, ".", "");
+  // Load env from .env files
+  // First load VITE_ prefixed vars (default behavior)
+  const viteEnv = loadEnv(mode, ".", "VITE_");
+  // Then load all vars including non-prefixed ones
+  const allEnv = loadEnv(mode, ".", "");
+  
   const isMobileBuild = process.env.CAPACITOR_BUILD === 'true';
+  
+  // Prioritize GEMINI_API_KEY from .env files, fallback to VITE_ prefixed
+  const apiKey = allEnv.GEMINI_API_KEY || viteEnv.VITE_GEMINI_API_KEY || "";
+  
+  // Debug: Log which API key is being used (first 10 chars only)
+  console.log(`[Vite Config] GEMINI_API_KEY: ${apiKey.substring(0, 10)}...`);
 
   return {
     // Use relative paths for Capacitor mobile builds
@@ -41,12 +52,13 @@ export default defineConfig(({ mode }) => {
       },
     },
     define: {
-      "process.env.API_KEY": JSON.stringify(env.GEMINI_API_KEY),
-      "process.env.GEMINI_API_KEY": JSON.stringify(env.GEMINI_API_KEY),
+      "process.env.API_KEY": JSON.stringify(apiKey),
+      "process.env.GEMINI_API_KEY": JSON.stringify(apiKey),
+      "process.env.VITE_GEMINI_API_KEY": JSON.stringify(apiKey),
       "process.env.VITE_DEAPI_API_KEY": JSON.stringify(
-        env.VITE_DEAPI_API_KEY || "",
+        allEnv.VITE_DEAPI_API_KEY || viteEnv.VITE_DEAPI_API_KEY || "",
       ),
-      "process.env.DEAPI_API_KEY": JSON.stringify(env.VITE_DEAPI_API_KEY || ""),
+      "process.env.DEAPI_API_KEY": JSON.stringify(allEnv.VITE_DEAPI_API_KEY || viteEnv.VITE_DEAPI_API_KEY || ""),
     },
     resolve: {
       alias: {

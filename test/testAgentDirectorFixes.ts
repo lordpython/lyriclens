@@ -8,7 +8,7 @@
  */
 
 import { generatePromptsWithAgent } from "../services/agentDirectorService";
-import { VideoPurpose } from "../constants";
+import type { VideoPurpose } from "../constants";
 
 async function testAgentDirectorFixes() {
   console.log("🎬 Testing Agent Director Service Fixes...\n");
@@ -37,7 +37,7 @@ Echoes of a distant call`;
       testLyrics,
       "Cinematic",
       "lyrics",
-      VideoPurpose.MUSIC_VIDEO,
+      "music_video",
       "melancholic atmosphere"
     );
 

@@ -70,6 +70,14 @@ const analysisOutputArbitrary: fc.Arbitrary<AnalysisOutput> = fc.record({
   }),
   themes: fc.array(fc.constantFrom('love', 'loss', 'hope', 'journey', 'nature', 'urban'), { minLength: 3, maxLength: 6 }),
   motifs: fc.array(fc.constantFrom('water', 'light', 'shadows', 'mirrors', 'doors'), { minLength: 2, maxLength: 4 }),
+  concreteMotifs: fc.array(
+    fc.record({
+      object: fc.constantFrom('candle', 'door', 'rain', 'mirror', 'window', 'clock'),
+      timestamp: fc.integer({ min: 0, max: 5 }).map(m => `0${m}:00`),
+      emotionalContext: fc.constantFrom('longing', 'hope', 'fear', 'peace', 'nostalgia'),
+    }),
+    { minLength: 0, maxLength: 5 }
+  ),
 });
 
 /**
@@ -736,7 +744,7 @@ export async function testLintValidationIntegration(): Promise<boolean> {
   
   // Test 2: Verify critical issues are correctly identified
   let criticalIterations = 0;
-  const criticalmaxIterations = 20;
+  const criticalMaxIterations = 20;
   
   // Generate prompts that should trigger critical issues
   const criticalPromptArbitrary = fc.oneof(

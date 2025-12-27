@@ -377,7 +377,7 @@ export const ImageGenerator = React.memo<ImageGeneratorProps>(({
               <div className="flex flex-col gap-2">
                 <Textarea
                   value={currentPromptText}
-                  onChange={(e) => setCurrentPromptText(e.target.value)}
+                  onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) => setCurrentPromptText(e.target.value)}
                   className="min-h-25 text-sm bg-muted border-input text-foreground focus:ring-primary"
                 />
                 <div className="flex justify-end gap-2">

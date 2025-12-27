@@ -1,4 +1,4 @@
-import express, { Request, Response, NextFunction } from 'express';
+import express, { Request, Response } from 'express';
 import cors from 'cors';
 import multer from 'multer';
 import { spawn } from 'child_process';
@@ -82,7 +82,7 @@ const storage = multer.diskStorage({
 
     cb(null, sessionDir);
   },
-  filename: (req, file, cb) => {
+  filename: (_req, file, cb) => {
     if (file.fieldname === 'audio') {
       cb(null, 'audio.mp3');
     } else {

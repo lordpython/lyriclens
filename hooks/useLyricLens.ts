@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { AppState, SongData, GeneratedImage, AssetType } from "../types";
+import { AppState, SongData, GeneratedImage, AssetType, ImagePrompt, SubtitleItem } from "../types";
 import {
   transcribeAudioWithWordTiming,
   fileToGenerativePart,
@@ -35,15 +35,24 @@ export function useLyricLens() {
   // Translation State
   const [isTranslating, setIsTranslating] = useState(false);
 
+  // Store file for processing (kept for backward compatibility)
   const handleFileSelect = (file: File) => {
     setErrorMsg(null);
     setPendingFile(file);
-    setAppState(AppState.CONFIGURING);
+    // Don't change state - let caller decide when to process
   };
 
-  const startProcessing = async (selectedStyle: string) => {
-    if (!pendingFile) return;
-    const file = pendingFile;
+  /**
+   * Process a file directly without relying on pendingFile state.
+   * This eliminates the race condition where state may not be updated
+   * before processing begins.
+   * 
+   * @param file - The audio file to process
+   * @param selectedStyle - The style to use for prompt generation
+   */
+  const processFile = async (file: File, selectedStyle: string) => {
+    // Also update pendingFile for backward compatibility
+    setPendingFile(file);
 
     try {
       setErrorMsg(null);
@@ -65,6 +74,7 @@ export function useLyricLens() {
       const base64Audio = await fileToGenerativePart(file);
 
       // 3. Transcribe with word-level timing
+      setAppState(AppState.TRANSCRIBING);
       const parsedSubs = await transcribeAudioWithWordTiming(
         base64Audio,
         file.type,
@@ -76,9 +86,10 @@ export function useLyricLens() {
       partialData.parsedSubtitles = parsedSubs;
       setSongData({ ...partialData });
 
+      // 4. Analyze content structure
       setAppState(AppState.ANALYZING_LYRICS);
 
-      // 4. NEW: Calculate optimal number of assets using dynamic asset calculator
+      // 5. Calculate optimal number of assets using dynamic asset calculator
       // Get audio duration from the audio buffer
       const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
       const arrayBuffer = await file.arrayBuffer();
@@ -102,7 +113,8 @@ export function useLyricLens() {
       console.log(`[useLyricLens] Dynamic asset calculation: ${assetCalc.optimalAssetCount} assets recommended`);
       console.log(`[useLyricLens] Reasoning: ${assetCalc.reasoning}`);
 
-      // 5. Generate Prompts using selected Director mode with calculated asset count
+      // 6. Generate Prompts using selected Director mode with calculated asset count
+      setAppState(AppState.GENERATING_PROMPTS);
       // "chain" = LangChain LCEL pipeline (faster, deterministic)
       // "agent" = LangChain Agent with tools (smarter, self-improving)
       let prompts;
@@ -139,13 +151,22 @@ export function useLyricLens() {
     }
   };
 
+  /**
+   * Legacy function that uses pendingFile state.
+   * @deprecated Use processFile instead to avoid race conditions.
+   */
+  const startProcessing = async (selectedStyle: string) => {
+    if (!pendingFile) return;
+    await processFile(pendingFile, selectedStyle);
+  };
+
   const handleImageGenerated = (newImg: GeneratedImage) => {
     if (!songData) return;
-    setSongData((prev) => {
+    setSongData((prev: SongData | null) => {
       if (!prev) return null;
       // Remove existing if replacing
       const filtered = prev.generatedImages.filter(
-        (img) => img.promptId !== newImg.promptId,
+        (img: GeneratedImage) => img.promptId !== newImg.promptId,
       );
 
       return {
@@ -163,7 +184,7 @@ export function useLyricLens() {
     setIsBulkGenerating(true);
 
     const pendingPrompts = songData.prompts.filter(
-      (p) => !songData.generatedImages.some((img) => img.promptId === p.id),
+      (p: ImagePrompt) => !songData.generatedImages.some((img: GeneratedImage) => img.promptId === p.id),
     );
 
     // Track refined prompts for cross-scene deduplication
@@ -171,10 +192,10 @@ export function useLyricLens() {
 
     // Collect all existing prompt texts (from already-generated scenes) as initial context
     const existingPromptTexts = songData.prompts
-      .filter((p) =>
-        songData.generatedImages.some((img) => img.promptId === p.id),
+      .filter((p: ImagePrompt) =>
+        songData.generatedImages.some((img: GeneratedImage) => img.promptId === p.id),
       )
-      .map((p) => p.text);
+      .map((p: ImagePrompt) => p.text);
 
     refinedPromptTexts.push(...existingPromptTexts);
 
@@ -278,12 +299,12 @@ export function useLyricLens() {
       );
 
       // Merge translations
-      const updatedSubs = songData.parsedSubtitles.map((sub) => {
-        const trans = translations.find((t) => t.id === sub.id);
+      const updatedSubs = songData.parsedSubtitles.map((sub: SubtitleItem) => {
+        const trans = translations.find((t: { id: number; translation: string }) => t.id === sub.id);
         return trans ? { ...sub, translation: trans.translation } : sub;
       });
 
-      setSongData((prev) =>
+      setSongData((prev: SongData | null) =>
         prev ? { ...prev, parsedSubtitles: updatedSubs } : null,
       );
     } catch (e) {
@@ -343,15 +364,15 @@ export function useLyricLens() {
     setGenerationMode,
     videoProvider,
     setVideoProvider,
-    directorMode,
-    setDirectorMode,
+    // directorMode and setDirectorMode kept internal - not exposed
     setAspectRatio,
     setGlobalSubject,
     setContentType,
     setVideoPurpose,
     handleFileSelect,
     startProcessing,
-    pendingFile,
+    processFile,
+    // pendingFile removed from exports - use processFile instead
     handleImageGenerated,
     handleGenerateAll,
     handleTranslate,
