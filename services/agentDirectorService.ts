@@ -112,7 +112,7 @@ class AgentDirectorLogger {
     };
 
     this.logs.push(entry);
-    
+
     // Trim old logs if necessary
     if (this.logs.length > this.maxLogs) {
       this.logs = this.logs.slice(-this.maxLogs);
@@ -259,7 +259,7 @@ class AgentDirectorMetricsCollector {
     const totalExtractions = Array.from(this.metrics.extractionMethodBreakdown.values())
       .reduce((sum, count) => sum + count, 0);
     const fallbackCount = this.metrics.extractionMethodBreakdown.get(ExtractionMethod.FALLBACK_TEXT) || 0;
-    
+
     if (totalExtractions > 0) {
       this.metrics.fallbackUsageRate = fallbackCount / totalExtractions;
     }
@@ -295,8 +295,8 @@ class AgentDirectorMetricsCollector {
     }
 
     return {
-      successRate: this.metrics.totalRequests > 0 
-        ? this.metrics.successfulRequests / this.metrics.totalRequests 
+      successRate: this.metrics.totalRequests > 0
+        ? this.metrics.successfulRequests / this.metrics.totalRequests
         : 0,
       averageTimeMs: this.metrics.averageProcessingTimeMs,
       fallbackRate: this.metrics.fallbackUsageRate,
@@ -338,9 +338,9 @@ const analyzeContentTool = tool(
   },
   {
     name: "analyze_content",
-    description: `Analyze lyrics or story content to identify structure, emotional arc, themes, and motifs.
+    description: `Analyze lyrics or story content to identify key themes, motifs, and concrete physical objects.
 Use this FIRST before generating storyboards.
-RETURNS: A JSON object with sections, emotionalArc, themes, motifs, and concreteMotifs.
+RETURNS: A JSON object with themes, motifs, and concreteMotifs.
 IMPORTANT: Copy the EXACT output of this tool and pass it directly to generate_storyboard's analysisJson parameter.`,
     schema: z.object({
       content: z.string().describe("The SRT/lyrics/story content to analyze"),
@@ -393,7 +393,7 @@ const analyzeAndGenerateStoryboardTool = tool(
       // Step 1: Analyze content
       console.log("[AgentDirector] Step 1: Analyzing content...");
       const analysis = await runAnalyzer(content, contentType);
-      console.log(`[AgentDirector] Analysis complete: ${analysis.sections.length} sections, ${analysis.concreteMotifs?.length || 0} motifs`);
+      console.log(`[AgentDirector] Analysis complete: ${analysis.themes.length} themes, ${analysis.concreteMotifs?.length || 0} motifs`);
 
       // Step 2: Generate storyboard from analysis
       console.log("[AgentDirector] Step 2: Generating storyboard...");
@@ -421,9 +421,7 @@ const analyzeAndGenerateStoryboardTool = tool(
       // Return combined result
       return JSON.stringify({
         analysis: {
-          sectionCount: analysis.sections.length,
           themes: analysis.themes,
-          emotionalArc: analysis.emotionalArc,
           concreteMotifs: analysis.concreteMotifs,
         },
         storyboard: storyboard,
@@ -521,20 +519,20 @@ async function extractAnalysisJson(input: string): Promise<AnalysisOutput> {
   const extracted = await jsonExtractor.extractJSON(input);
   if (extracted) {
     const data = extracted.data as Record<string, unknown>;
-    
+
     // Check if it's already a valid AnalysisOutput
-    if (data.sections && Array.isArray(data.sections)) {
+    if (data.themes && Array.isArray(data.themes)) {
       agentLogger.logExtractionSuccess(jsonExtractor.getLastSuccess()!);
       agentMetrics.recordExtractionMethod(extracted.method);
       return data as AnalysisOutput;
     }
-    
+
     // Check if it's wrapped in a "result" field
     if (data.result) {
       const innerData = typeof data.result === 'string'
         ? JSON.parse(data.result)
         : data.result;
-      if (innerData.sections && Array.isArray(innerData.sections)) {
+      if (innerData.themes && Array.isArray(innerData.themes)) {
         agentLogger.logExtractionSuccess(jsonExtractor.getLastSuccess()!);
         agentMetrics.recordExtractionMethod(extracted.method);
         return innerData as AnalysisOutput;
@@ -575,13 +573,13 @@ async function extractAnalysisJson(input: string): Promise<AnalysisOutput> {
     }
   }
 
-  // Strategy 3: Find JSON object with "sections" array
-  const sectionsMatch = input.match(/\{[\s\S]*"sections"\s*:\s*\[[\s\S]*\][\s\S]*\}/);
-  if (sectionsMatch) {
+  // Strategy 3: Find JSON object with "themes" array
+  const themesMatch = input.match(/\{[\s\S]*"themes"\s*:\s*\[[\s\S]*\][\s\S]*\}/);
+  if (themesMatch) {
     try {
-      const sanitized = sanitizeJsonString(sectionsMatch[0]);
+      const sanitized = sanitizeJsonString(themesMatch[0]);
       const parsed = JSON.parse(sanitized);
-      if (parsed.sections && Array.isArray(parsed.sections)) {
+      if (parsed.themes && Array.isArray(parsed.themes)) {
         return parsed as AnalysisOutput;
       }
     } catch {
@@ -614,15 +612,13 @@ async function extractAnalysisJson(input: string): Promise<AnalysisOutput> {
     // Continue
   }
 
-  // Strategy 5: Build minimal valid structure if we can find sections array
+  // Strategy 5: Build minimal valid structure if we can find themes array
   try {
-    const sectionsArrayMatch = input.match(/"sections"\s*:\s*(\[[\s\S]*?\])/);
-    if (sectionsArrayMatch) {
-      const sectionsArray = JSON.parse(sectionsArrayMatch[1]);
+    const themesArrayMatch = input.match(/"themes"\s*:\s*(\[[\s\S]*?\])/);
+    if (themesArrayMatch) {
+      const themesArray = JSON.parse(themesArrayMatch[1]);
       return {
-        sections: sectionsArray,
-        emotionalArc: { opening: "Unknown", peak: "Unknown", resolution: "Unknown" },
-        themes: [],
+        themes: themesArray,
         motifs: [],
         concreteMotifs: [],
       } as AnalysisOutput;
@@ -657,7 +653,7 @@ const generateStoryboardTool = tool(
 
       // Use enhanced extraction to handle malformed AI responses
       const analysis = await extractAnalysisJson(analysisJson);
-      agentLogger.debug('Analysis extracted', { sectionCount: analysis.sections.length });
+      agentLogger.debug('Analysis extracted', { themeCount: analysis.themes.length });
 
       const storyboard = await runStoryboarder(
         analysis,
@@ -676,14 +672,14 @@ const generateStoryboardTool = tool(
           errors: validation.errors,
           warnings: validation.warnings
         });
-        
+
         // Attempt reconstruction if validation failed
         const reconstructed = jsonExtractor.attemptReconstruction(storyboard, validation);
         if (reconstructed.fixedData) {
           agentLogger.info('Storyboard reconstructed successfully');
           return JSON.stringify(reconstructed.fixedData, null, 2);
         }
-        
+
         throw new Error(`Invalid storyboard structure: ${validation.errors.join(', ')}`);
       }
 
@@ -709,21 +705,21 @@ const generateStoryboardTool = tool(
       // Sanitize the storyboard before returning
       const sanitizedStoryboard = jsonExtractor.sanitizeStoryboard(storyboard);
 
-      agentLogger.info('Storyboard generated and validated', { 
-        promptCount: sanitizedStoryboard.prompts?.length || 0 
+      agentLogger.info('Storyboard generated and validated', {
+        promptCount: sanitizedStoryboard.prompts?.length || 0
       });
       return JSON.stringify(sanitizedStoryboard, null, 2);
     } catch (error) {
       const errorMsg = `Storyboard generation failed: ${error instanceof Error ? error.message : String(error)}`;
       agentLogger.error('Storyboard generation failed', { error: errorMsg });
-      
+
       // Attempt fallback processing
       agentLogger.info('Attempting fallback processing for storyboard generation');
       const fallbackStoryboard = fallbackProcessor.processWithFallback(
         analysisJson,
         error instanceof Error ? error.message : String(error)
       );
-      
+
       if (fallbackStoryboard && fallbackStoryboard.prompts.length > 0) {
         agentLogger.info('Fallback storyboard generated', {
           promptCount: fallbackStoryboard.prompts.length,
@@ -732,7 +728,7 @@ const generateStoryboardTool = tool(
         agentMetrics.recordExtractionMethod(ExtractionMethod.FALLBACK_TEXT);
         return JSON.stringify(fallbackStoryboard, null, 2);
       }
-      
+
       return errorMsg;
     }
   },
@@ -1253,7 +1249,7 @@ Follow workflow: analyze → generate → critique → refine if needed.`;
             const extracted = await jsonExtractor.extractJSON(result);
             if (extracted) {
               const parsed = extracted.data as Record<string, unknown>;
-              
+
               // Handle combined tool output (has nested storyboard)
               const storyboard = (parsed.storyboard || parsed) as StoryboardOutput;
 
@@ -1262,7 +1258,7 @@ Follow workflow: analyze → generate → critique → refine if needed.`;
                 const validation = jsonExtractor.validateStoryboard(storyboard);
                 if (validation.isValid) {
                   finalStoryboard = jsonExtractor.sanitizeStoryboard(storyboard as StoryboardData) as StoryboardOutput;
-                  agentLogger.info('Storyboard captured', { 
+                  agentLogger.info('Storyboard captured', {
                     promptCount: finalStoryboard.prompts?.length || 0,
                     method: extracted.method
                   });
@@ -1291,13 +1287,13 @@ Follow workflow: analyze → generate → critique → refine if needed.`;
             }
           } catch (error) {
             agentLogger.warn('Failed to parse storyboard result', { error: String(error) });
-            
+
             // Attempt fallback processing
             const fallbackStoryboard = fallbackProcessor.processWithFallback(
               result,
               error instanceof Error ? error.message : String(error)
             );
-            
+
             if (fallbackStoryboard && fallbackStoryboard.prompts.length > 0) {
               finalStoryboard = {
                 prompts: fallbackStoryboard.prompts.map((p, i) => ({
@@ -1337,14 +1333,14 @@ Follow workflow: analyze → generate → critique → refine if needed.`;
     if (finalStoryboard?.prompts) {
       const prompts = convertToImagePrompts(finalStoryboard.prompts);
       const duration = Date.now() - startTime;
-      
+
       agentLogger.info('Agent workflow complete', {
         promptCount: prompts.length,
         durationMs: duration,
         iterations
       });
       agentMetrics.recordRequest(true, duration);
-      
+
       return prompts;
     }
 
@@ -1369,7 +1365,7 @@ Follow workflow: analyze → generate → critique → refine if needed.`;
 
   } catch (error) {
     const duration = Date.now() - startTime;
-    agentLogger.error('Agent execution failed', { 
+    agentLogger.error('Agent execution failed', {
       error: error instanceof Error ? error.message : String(error),
       durationMs: duration
     });
@@ -1394,7 +1390,7 @@ async function extractStoryboardFromContent(content: string): Promise<Storyboard
   const extracted = await jsonExtractor.extractJSON(content);
   if (extracted) {
     const data = extracted.data as Record<string, unknown>;
-    
+
     // Check for storyboard structure
     if (data.prompts && Array.isArray(data.prompts)) {
       // Validate and sanitize
@@ -1418,7 +1414,7 @@ async function extractStoryboardFromContent(content: string): Promise<Storyboard
         }
       }
     }
-    
+
     // Check for nested storyboard (from combined tool)
     if (data.storyboard && typeof data.storyboard === 'object') {
       const storyboard = data.storyboard as Record<string, unknown>;
@@ -1466,14 +1462,14 @@ async function extractStoryboardFromContent(content: string): Promise<Storyboard
     content,
     'No valid storyboard JSON found in content'
   );
-  
+
   if (fallbackStoryboard && fallbackStoryboard.prompts.length > 0) {
     agentLogger.info('Fallback storyboard generated', {
       promptCount: fallbackStoryboard.prompts.length,
       confidence: fallbackStoryboard.metadata.confidence
     });
     agentMetrics.recordExtractionMethod(ExtractionMethod.FALLBACK_TEXT);
-    
+
     // Convert BasicStoryboard to StoryboardOutput format
     return {
       prompts: fallbackStoryboard.prompts.map((p, i) => ({

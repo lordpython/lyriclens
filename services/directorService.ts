@@ -22,21 +22,9 @@ import { parseSRTTimestamp } from "../utils/srtParser";
  * Defines the structure of content analysis including sections, emotional arc, themes, and motifs.
  */
 export const AnalysisSchema = z.object({
-  sections: z.array(z.object({
-    name: z.string().describe("Section name (e.g., Intro, Verse 1, Chorus)"),
-    startTimestamp: z.string().describe("Start timestamp in MM:SS format"),
-    endTimestamp: z.string().describe("End timestamp in MM:SS format"),
-    type: z.enum(["intro", "verse", "pre-chorus", "chorus", "bridge", "outro", "transition", "key_point", "conclusion"]),
-    emotionalIntensity: z.number().min(1).max(10).describe("Emotional intensity 1-10"),
-  })),
-  emotionalArc: z.object({
-    opening: z.string().describe("Opening emotional tone"),
-    peak: z.string().describe("Peak emotional moment"),
-    resolution: z.string().describe("Resolution/closing tone"),
-  }),
   themes: z.array(z.string()).describe("Key visual themes extracted from content"),
   motifs: z.array(z.string()).describe("Recurring visual motifs to maintain consistency"),
-  // NEW: Concrete motifs for literal visualization (the "candle" fix)
+  // Concrete motifs for literal visualization (the "candle" fix)
   concreteMotifs: z.array(z.object({
     object: z.string().describe("Physical object mentioned (e.g., 'candle', 'door', 'rain', 'mirror')"),
     timestamp: z.string().describe("When it first appears (MM:SS format)"),
@@ -178,17 +166,13 @@ function createAnalyzerTemplate(contentType: "lyrics" | "story"): ChatPromptTemp
 
   return ChatPromptTemplate.fromMessages([
     ["system", `You are a professional content analyst specializing in ${contentType} analysis.
-Your task is to analyze the provided content and identify its structure, emotional arc, key themes, and CONCRETE VISUAL MOTIFS.
+Your task is to analyze the provided content and identify its key themes, motifs, and CONCRETE VISUAL MOTIFS.
 
 CONTENT TYPE: ${contentType}
-${contentTypeGuidance}
 
 ANALYSIS REQUIREMENTS:
-1. Identify 4-12 distinct sections with timestamps
-2. Determine emotional intensity (1-10) for each section
-3. Extract the overall emotional arc (opening → peak → resolution)
-4. Identify 3-6 key visual themes
-5. Identify 2-4 recurring visual motifs for consistency
+1. Identify 3-6 key visual themes
+2. Identify 2-4 recurring visual motifs for consistency
 
 CONCRETE MOTIF EXTRACTION (CRITICAL - THE "CANDLE FIX"):
 Hunt for EVERY physical object mentioned in the text. These MUST be visualized LITERALLY:
@@ -207,15 +191,11 @@ The object IS the metaphor. Show the object.
 
 OUTPUT FORMAT:
 Return a valid JSON object (no markdown code blocks) with these fields:
-- "sections": array of objects, each with "name" (string), "startTimestamp" (MM:SS), "endTimestamp" (MM:SS), "type" (lowercase enum), "emotionalIntensity" (1-10)
-- "emotionalArc": object with "opening", "peak", "resolution" strings
 - "themes": array of theme strings (3-6 items)
 - "motifs": array of motif strings (2-4 items)
 - "concreteMotifs": array of objects with "object" (the physical thing), "timestamp" (MM:SS), "emotionalContext" (what it represents)
 
-CRITICAL: The "type" field MUST be one of these exact lowercase values: ${validTypes}
-Do NOT use capitalized values like "Verse" - use lowercase "verse" instead.
-Timestamps should be in MM:SS format (e.g., "01:30").`],
+CRITICAL: Timestamps should be in MM:SS format (e.g., "01:30").`],
     ["human", `Analyze this content:
 
 {content}`],
@@ -298,20 +278,16 @@ PROMPT WRITING RULES:
    - Setting: WHERE the scene takes place
    - Lighting: Type and quality (e.g., "golden hour backlighting", "harsh overhead fluorescent", "soft diffused window light")
    - Texture: At least one tactile detail (e.g., "weathered wood grain", "rain-slicked asphalt", "velvet fabric")
-   - Camera: Shot type and angle (e.g., "extreme close-up at eye level", "wide establishing shot from low angle")
-   - Atmosphere: Mood and ambient details
-4. NEVER include text, titles, lyrics, subtitles, captions, labels, typography, written words, or UI elements inside the image - this is a CRITICAL requirement
-5. NO generic phrases like "beautiful", "stunning", "amazing" - be SPECIFIC with descriptors
-6. Reference the main subject by their specific features, not just "the subject"
-7. Vary compositions: rule-of-thirds, centered, symmetrical, asymmetrical
-8. NEVER repeat the same camera angle in consecutive scenes
-9. Match visual intensity to emotional intensity from analysis
-10. INCLUDE at least one concrete motif from the list in each relevant scene
+    - Camera: Shot type and angle (e.g., "extreme close-up at eye level", "wide establishing shot from low angle")
+    - Atmosphere: Mood and ambient details
+ 4. NEVER include text, titles, lyrics, subtitles, captions, labels, typography, written words, or UI elements inside the image - this is a CRITICAL requirement
+ 5. NO generic phrases like "beautiful", "stunning", "amazing" - be SPECIFIC with descriptors
+ 6. Reference the main subject by their specific features, not just "the subject"
+ 7. Vary compositions: rule-of-thirds, centered, symmetrical, asymmetrical
+ 8. NEVER repeat the same camera angle in consecutive scenes
+ 9. INCLUDE at least one concrete motif from the list in each relevant scene
 11. SUBJECT CONSISTENCY: The GLOBAL SUBJECT takes priority. If a subject is specified, it MUST be the focus of at least 80% of the scenes.
 
-AVOID GENERIC CONFLICT TROPES:
-- NO "couple arguing" or "heated argument" scenes
-- NO generic "people fighting" imagery
 - Instead, use visual metaphors: glass breaking, door closing, wilting flower, fading photograph
 
 EMOTIONAL ARC GUIDANCE:
@@ -327,7 +303,7 @@ Return a valid JSON object (no markdown code blocks) with a "prompts" array cont
 Each prompt object must have:
 - "text": detailed visual prompt (60-120 words) starting with a concrete subject
 - "mood": emotional tone of the scene
-- "timestamp": timestamp in MM:SS format matching the analysis sections`],
+- "timestamp": timestamp in MM:SS format when this specific scene should occur. Distribute prompts logically across the content duration.`],
     ["human", `Create the visual storyboard based on the analysis provided. Remember to generate exactly {targetAssetCount} prompts that follow the persona rules and include the concrete motifs literally.`],
   ]);
 }

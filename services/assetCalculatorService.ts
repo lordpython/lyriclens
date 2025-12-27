@@ -2,7 +2,7 @@
  * Asset Calculator Service
  * Dynamically calculates optimal number of image/video assets based on:
  * - Audio duration
- * - Semantic analysis from directorService
+ * - Semantic analysis from directorService (Themes, Motifs, Concrete Objects)
  * - Content density
  * - Video purpose
  */
@@ -29,12 +29,6 @@ export interface AssetCalculationResult {
     optimalAssetCount: number;
     assetTimestamps: number[]; // seconds for each asset
     reasoning: string;
-    sections: {
-        start: number;
-        end: number;
-        assetCount: number;
-        emotionalIntensity: number;
-    }[];
 }
 
 /**
@@ -47,7 +41,6 @@ export async function calculateOptimalAssets(
         audioDuration,
         analysisOutput,
         videoPurpose,
-        contentType,
         minAssets = 6,
         maxAssets = 15,
     } = input;
@@ -59,18 +52,18 @@ export async function calculateOptimalAssets(
     const durationBaseline = calculateDurationBaseline(audioDuration);
     console.log(`[AssetCalculator] Duration baseline: ${durationBaseline} assets`);
 
-    // Factor 2: Semantic section analysis
-    const sectionBasedCount = calculateSectionBasedCount(analysisOutput);
-    console.log(`[AssetCalculator] Section-based count: ${sectionBasedCount} assets`);
+    // Factor 2: Motif density analysis (Replaces section analysis)
+    const motifBasedCount = calculateMotifBasedCount(analysisOutput);
+    console.log(`[AssetCalculator] Motif-based count: ${motifBasedCount} assets`);
 
     // Factor 3: Video purpose adjustment
     const purposeAdjustedCount = adjustForPurpose(
-        Math.max(durationBaseline, sectionBasedCount),
+        Math.max(durationBaseline, motifBasedCount),
         videoPurpose
     );
     console.log(`[AssetCalculator] Purpose-adjusted count: ${purposeAdjustedCount} assets`);
 
-    // Factor 4: Content density (subtitle timing)
+    // Factor 4: Content density (motif frequency)
     const densityAdjustedCount = adjustForContentDensity(
         purposeAdjustedCount,
         analysisOutput,
@@ -93,18 +86,11 @@ export async function calculateOptimalAssets(
         analysisOutput
     );
 
-    // Generate section breakdown
-    const sections = generateSectionBreakdown(
-        assetTimestamps,
-        analysisOutput,
-        audioDuration
-    );
-
     // Generate reasoning
     const reasoning = generateReasoning({
         audioDuration,
         durationBaseline,
-        sectionBasedCount,
+        motifBasedCount,
         purposeAdjustedCount,
         densityAdjustedCount,
         optimalAssetCount,
@@ -115,7 +101,6 @@ export async function calculateOptimalAssets(
         optimalAssetCount,
         assetTimestamps,
         reasoning,
-        sections,
     };
 }
 
@@ -139,31 +124,18 @@ function calculateDurationBaseline(duration: number): number {
 }
 
 /**
- * Calculate asset count based on semantic sections
+ * Calculate asset count based on concrete motif density
  */
-function calculateSectionBasedCount(analysis: AnalysisOutput): number {
-    if (!analysis.sections || analysis.sections.length === 0) {
-        return 8; // Default if no sections
+function calculateMotifBasedCount(analysis: AnalysisOutput): number {
+    const motifCount = analysis.concreteMotifs?.length || 0;
+
+    if (motifCount === 0) {
+        return 8; // Default
     }
 
-    let count = 0;
-
-    analysis.sections.forEach((section) => {
-        // Each section gets at least 1 asset
-        count += 1;
-
-        // High emotional intensity sections get 2 assets
-        if (section.emotionalIntensity > 7) {
-            count += 1;
-        }
-
-        // Transition sections get dedicated assets
-        if (section.type === "transition") {
-            count += 1;
-        }
-    });
-
-    return count;
+    // Goal: ensure every concrete motif gets a high chance of being shown
+    // We want at least as many assets as motifs, but capped for sanity
+    return Math.min(15, Math.max(8, motifCount + 2));
 }
 
 /**
@@ -195,35 +167,22 @@ function adjustForPurpose(count: number, purpose: VideoPurpose): number {
 }
 
 /**
- * Adjust asset count based on content density
+ * Adjust asset count based on content density (motifs per minute)
  */
 function adjustForContentDensity(
     count: number,
     analysis: AnalysisOutput,
     duration: number
 ): number {
-    if (!analysis.sections || analysis.sections.length === 0) {
-        return count;
-    }
+    const motifCount = analysis.concreteMotifs?.length || 0;
+    if (motifCount === 0) return count;
 
-    // Calculate average section duration
-    const totalSectionDuration = analysis.sections.reduce((sum, section) => {
-        const start = parseTimestamp(section.startTimestamp);
-        const end = parseTimestamp(section.endTimestamp);
-        return sum + (end - start);
-    }, 0);
+    const motifsPerMinute = motifCount / (duration / 60);
 
-    const avgSectionDuration = totalSectionDuration / analysis.sections.length;
-
-    // Dense content (short sections) → more assets
-    // Sparse content (long sections) → fewer assets
-    const densityFactor = avgSectionDuration / (duration / analysis.sections.length);
-
-    if (densityFactor < 0.8) {
-        // Dense: increase by 20%
-        return Math.round(count * 1.2);
-    } else if (densityFactor > 1.2) {
-        // Sparse: decrease by 15%
+    // Highly dense motifs → more assets
+    if (motifsPerMinute > 5) {
+        return Math.round(count * 1.25);
+    } else if (motifsPerMinute < 1) {
         return Math.round(count * 0.85);
     }
 
@@ -232,7 +191,7 @@ function adjustForContentDensity(
 
 /**
  * Calculate timestamps for each asset
- * Distributes assets evenly across duration with semantic awareness
+ * Distributes assets across content with bias towards concrete motifs
  */
 function calculateAssetTimestamps(
     count: number,
@@ -240,9 +199,12 @@ function calculateAssetTimestamps(
     analysis: AnalysisOutput
 ): number[] {
     const timestamps: number[] = [];
+    const motifTimes = (analysis.concreteMotifs || [])
+        .map(m => parseTimestamp(m.timestamp))
+        .sort((a, b) => a - b);
 
-    if (!analysis.sections || analysis.sections.length === 0) {
-        // Even distribution if no sections
+    if (motifTimes.length === 0) {
+        // Even distribution if no motifs
         const interval = duration / (count + 1);
         for (let i = 1; i <= count; i++) {
             timestamps.push(i * interval);
@@ -250,61 +212,30 @@ function calculateAssetTimestamps(
         return timestamps;
     }
 
-    // Distribute assets across sections
-    let assetsPerSection = Math.floor(count / analysis.sections.length);
-    let remainingAssets = count % analysis.sections.length;
+    // Mix motif timestamps with even distribution
+    // This ensures identified objects are shown, but gaps are filled
+    const evenInterval = duration / (count + 1);
+    const usedTimes = new Set<string>();
 
-    analysis.sections.forEach((section, idx) => {
-        const start = parseTimestamp(section.startTimestamp);
-        const end = parseTimestamp(section.endTimestamp);
-        const sectionDuration = end - start;
-
-        // Allocate assets to this section
-        const sectionAssets = assetsPerSection + (idx < remainingAssets ? 1 : 0);
-
-        // Distribute evenly within section
-        const interval = sectionDuration / (sectionAssets + 1);
-        for (let i = 1; i <= sectionAssets; i++) {
-            timestamps.push(start + i * interval);
-        }
+    // 1. Add motif times (up to count)
+    motifTimes.slice(0, count).forEach(t => {
+        timestamps.push(t);
+        usedTimes.add(t.toFixed(1));
     });
 
-    return timestamps;
-}
-
-/**
- * Generate section breakdown for debugging
- */
-function generateSectionBreakdown(
-    timestamps: number[],
-    analysis: AnalysisOutput,
-    duration: number
-): Array<{
-    start: number;
-    end: number;
-    assetCount: number;
-    emotionalIntensity: number;
-}> {
-    if (!analysis.sections || analysis.sections.length === 0) {
-        return [];
+    // 2. Fill remaining slots with even distribution
+    let currentIdx = 1;
+    while (timestamps.length < count && currentIdx <= count) {
+        const candidate = currentIdx * evenInterval;
+        // Simple check to avoid double-clumping
+        if (!Array.from(usedTimes).some(ut => Math.abs(parseFloat(ut) - candidate) < 2)) {
+            timestamps.push(candidate);
+            usedTimes.add(candidate.toFixed(1));
+        }
+        currentIdx++;
     }
 
-    return analysis.sections.map((section) => {
-        const start = parseTimestamp(section.startTimestamp);
-        const end = parseTimestamp(section.endTimestamp);
-
-        // Count assets in this section
-        const assetCount = timestamps.filter(
-            (t) => t >= start && t < end
-        ).length;
-
-        return {
-            start,
-            end,
-            assetCount,
-            emotionalIntensity: section.emotionalIntensity,
-        };
-    });
+    return timestamps.sort((a, b) => a - b);
 }
 
 /**
@@ -313,7 +244,7 @@ function generateSectionBreakdown(
 function generateReasoning(params: {
     audioDuration: number;
     durationBaseline: number;
-    sectionBasedCount: number;
+    motifBasedCount: number;
     purposeAdjustedCount: number;
     densityAdjustedCount: number;
     optimalAssetCount: number;
@@ -322,7 +253,7 @@ function generateReasoning(params: {
     const {
         audioDuration,
         durationBaseline,
-        sectionBasedCount,
+        motifBasedCount,
         purposeAdjustedCount,
         densityAdjustedCount,
         optimalAssetCount,
@@ -333,9 +264,9 @@ function generateReasoning(params: {
 
     parts.push(`Audio duration: ${Math.round(audioDuration)}s`);
     parts.push(`Duration baseline: ${durationBaseline} assets`);
-    parts.push(`Semantic sections: ${sectionBasedCount} assets`);
+    parts.push(`Motif density: ${motifBasedCount} assets`);
     parts.push(`Purpose adjustment (${videoPurpose}): ${purposeAdjustedCount} assets`);
-    parts.push(`Content density: ${densityAdjustedCount} assets`);
+    parts.push(`Content density factor: ${densityAdjustedCount} assets`);
     parts.push(`Final optimal count: ${optimalAssetCount} assets`);
 
     return parts.join("\n");

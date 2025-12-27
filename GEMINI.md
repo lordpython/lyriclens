@@ -11,14 +11,14 @@ LyricLens is an AI-powered application that turns audio tracks—including music
 -   **Video Providers:** Google Veo (via Gemini) & **DeAPI** (3rd party).
 
 ### Core Features
-*   **Director Mode:** A sophisticated LangChain-based agent system (Analyzer & Storyboarder) that analyzes content structure (emotional arc, sections) to generate cohesive, cinematically paced visual storyboards.
-*   **Dynamic Persona System:** AI adapts its behavior based on video purpose:
+*   **Director Mode:** A sophisticated LangChain-based agent system (Analyzer & Storyboarder) that analyzes content themes, motifs, and concrete visual objects to generate cohesive, cinematically paced visual storyboards.
+*   **Visual Persona Support:** AI adapts its behavior based on video purpose:
     *   **Brand Specialist** (Commercial): Product-focused, clean lighting, no metaphors
     *   **Visual Poet** (Music Video): Metaphor literalism - shows actual objects mentioned in lyrics
     *   **Historian** (Documentary): Realism and accuracy focused
     *   **Viral Creator** (Social Short): Scroll-stopping visual hooks
 *   **Concrete Motif Extraction:** The "Candle Fix" - when lyrics mention physical objects (candle, door, rain), the AI is forced to show these objects literally, not as abstract interpretations.
-*   **Dual Modes:** Support for "Music Video" (Verse/Chorus analysis) and "Story / Speech" (Narrative/Segment analysis).
+*   **Universal Content Handling:** Support for music, stories, ads, and documentaries.
 *   **Video Generation:** Create animated videos using **Google Veo** or **DeAPI** (img2video).
 *   **Translation:** Built-in subtitle translation to reach global audiences.
 *   **Intent-Based Prompts:** 13+ specialized visual styles including "Commercial/Ad", "Manga", "Tutorial", and "Cinematic".
@@ -33,7 +33,7 @@ The project uses a **hybrid architecture** combining client-side interactivity w
 
 1.  **AI Orchestration (Director Service):**
     *   **Persona System:** `getSystemPersona(purpose)` returns purpose-specific AI behavior rules.
-    *   **Analyzer Agent:** Analyzes lyrics/transcript to determine emotional intensity, themes, structure, and **concrete motifs** (physical objects to visualize).
+    *   **Analyzer Agent:** Analyzes lyrics/transcript to determine themes, recurring motifs, and **concrete motifs** (physical objects to visualize).
     *   **Storyboarder Agent:** Generates detailed visual prompts mapped to the analysis, enforcing motif literalism.
     *   Uses **Zod** schemas for strictly typed AI outputs.
 
