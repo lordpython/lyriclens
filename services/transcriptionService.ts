@@ -55,10 +55,16 @@ export const transcribeAudio = async (
         parts: [
           { inlineData: { mimeType, data: base64Audio } },
           {
-            text: `Transcribe lyrics to SRT format.
-            Rules:
-            1. Format: ID [newline] HH:MM:SS,mmm --> HH:MM:SS,mmm [newline] Text
-            2. No markdown blocks. Return ONLY raw SRT text.`,
+            text: `Transcribe ALL spoken content of this audio to SRT format.
+
+CRITICAL: You MUST transcribe EVERY SINGLE WORD from start to finish. Do NOT skip any sections or repeated phrases.
+
+Rules:
+1. Format: ID [newline] HH:MM:SS,mmm --> HH:MM:SS,mmm [newline] Text
+2. No markdown blocks. Return ONLY raw SRT text.
+3. Transcribe EVERYTHING - all speech, narration, lyrics, dialogue.
+4. Cover the ENTIRE audio duration.
+5. Do NOT summarize or skip any sections.`,
           },
         ],
       },
@@ -89,23 +95,28 @@ export const transcribeAudioWithWordTiming = async (
           parts: [
             { inlineData: { mimeType, data: base64Audio } },
             {
-              text: `Transcribe the lyrics of this audio file with precise word-level timing.
+              text: `Transcribe ALL spoken content of this audio file with precise word-level timing.
 
-  Return a JSON object with this structure:
-  {
-    "lines": [
-      {
-        "id": 1, "startTime": 0.0, "endTime": 3.5, "text": "Hello from the other side",
-        "words": [ {"word": "Hello", "start": 0.0, "end": 0.8}, ... ]
-      }
-    ]
-  }
+CRITICAL: You MUST transcribe EVERY SINGLE WORD from start to finish. Do NOT skip any sections, pauses, or repeated phrases.
 
-  Rules:
-  1. Times in SECONDS (e.g. 1.5).
-  2. Each line is a natural phrase.
-  3. word.start/end are exact.
-  4. Be precise.`,
+Return a JSON object with this structure:
+{
+  "lines": [
+    {
+      "id": 1, "startTime": 0.0, "endTime": 3.5, "text": "Example spoken text here",
+      "words": [ {"word": "Example", "start": 0.0, "end": 0.8}, ... ]
+    }
+  ]
+}
+
+Rules:
+1. Times in SECONDS (e.g. 1.5).
+2. Each line is a natural phrase (typically 3-8 words).
+3. word.start/end must be precise timestamps.
+4. TRANSCRIBE EVERYTHING - all speech, narration, lyrics, dialogue.
+5. If there are silent/instrumental sections, the next line should have the correct start time after the break.
+6. Do NOT summarize or skip any sections - transcribe them ALL.
+7. Cover the ENTIRE audio duration from 0 seconds to the end.`,
             },
           ],
         },

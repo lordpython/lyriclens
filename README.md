@@ -2,19 +2,48 @@
 <img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
 </div>
 
-# Run and deploy your AI Studio app
+# LyricLens - AI Audio Visualizer & Video Generator
 
-This contains everything you need to run your app locally.
+Transform any audio—music, podcasts, stories, documentaries, ads—into stunning synchronized videos with AI-generated visuals.
 
-View your app in AI Studio: https://ai.studio/apps/drive/1EYwUSgC06fsiLGFXbAmNWutqAu8RDc5b
+## ✨ Features
 
-## Run Locally
+- **Universal Transcription**: Transcribes any audio content with word-level timing
+- **AI Visual Generation**: Creates cinematic imagery using Google Gemini or DeAPI
+- **Smart Storyboarding**: Analyzes content structure for emotionally-paced visuals
+- **Multiple Export Options**: Cloud render (fast) or browser-based (private)
+- **Cross-Platform**: Web, Android, and iOS support via Capacitor
 
-**Prerequisites:**  Node.js
+## 🚀 Quick Start
 
+**Prerequisites:** Node.js v18+, FFmpeg (for server export)
 
-1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
+```bash
+# Install dependencies
+npm install
+
+# Set up environment
+cp .env.example .env.local
+# Edit .env.local and add your GEMINI_API_KEY
+
+# Run the app (frontend + backend)
+npm run dev:all
+```
+
+## 📖 Documentation
+
+See [GEMINI.md](./GEMINI.md) for detailed architecture, services, and development conventions.
+
+## 🔧 Commands
+
+| Command | Description |
+|---------|-------------|
+| `npm run dev:all` | Run frontend + backend server |
+| `npm run dev` | Frontend only |
+| `npm run server` | Backend only |
+| `npm run build` | Production build |
+| `npm run cap:android` | Open Android Studio |
+
+## 📄 License
+
+MIT

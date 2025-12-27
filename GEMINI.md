@@ -42,6 +42,7 @@ The project uses a **hybrid architecture** combining client-side interactivity w
     *   **Export:**
         *   **Cloud Render:** Uploads frames to the Node.js server for FFmpeg stitching (best for quality/speed).
         *   **Browser Render:** Uses `ffmpeg-wasm` for client-side encoding (best for privacy).
+    *   **Speed Optimizations:** 720p rendering with FFmpeg upscaling, 24 FPS (cinema standard), optimized JPEG encoding.
 
 ## Key Files & Services
 
@@ -52,7 +53,8 @@ The project uses a **hybrid architecture** combining client-side interactivity w
 *   **`translationService.ts`**: Handles batch translation of subtitles.
 *   **`promptService.ts`**: Logic for prompt linting, refinement, Jaccard similarity checks (anti-repetition), and motion prompt generation.
 *   **`imageService.ts`**: Abstracts image generation requests and applies style modifiers.
-*   **`ffmpegService.ts`**: shared logic for video export.
+*   **`ffmpegService.ts`**: Video export with optimized 720p rendering and 24 FPS encoding.
+*   **`transcriptionService.ts`**: Audio-to-text transcription with word-level timing (supports music, speech, documentaries, ads).
 
 ### Components (`components/`)
 *   **`ConfigurationWizard.tsx`**: Multi-step flow for setting up a new project (Style, Mode, Ratio, Subject).

@@ -223,7 +223,7 @@ function renderTextWithWipe(
     }
 
     ctx.clip();
-    
+
     // Draw bright white revealed text with glow
     ctx.shadowColor = "rgba(255, 215, 100, 0.8)";
     ctx.shadowBlur = 15;
@@ -681,7 +681,7 @@ const renderFrameToCanvas = async (
 
       const lineText = displayLineWords.join(" ");
       const lineWidth = ctx.measureText(lineText).width;
-      
+
       // For RTL: start from right side and move left
       // For LTR: start from left side and move right
       let xPos: number;
@@ -857,19 +857,19 @@ const renderFrameToCanvas = async (
         } else {
           // Simple mode: solid color transition with professional colors
           ctx.save();
-          
+
           // Add text shadow for readability
           ctx.shadowColor = "rgba(0, 0, 0, 0.8)";
           ctx.shadowBlur = 8;
           ctx.shadowOffsetY = 2;
-          
+
           // Draw outline
           ctx.strokeStyle = "rgba(0, 0, 0, 0.5)";
           ctx.lineWidth = 3;
           ctx.lineJoin = "round";
           ctx.textAlign = "left";
           ctx.strokeText(word, xPos, yPos);
-          
+
           if (wordProgress >= 1) {
             ctx.fillStyle = "#ffffff"; // Pure white for completed words
           } else if (wordProgress > 0) {
@@ -934,12 +934,12 @@ const renderFrameToCanvas = async (
         ctx.shadowColor = "rgba(0, 0, 0, 0.9)";
         ctx.shadowBlur = 8;
         ctx.shadowOffsetY = 2;
-        
+
         // Draw outline for readability
         ctx.strokeStyle = "rgba(0, 0, 0, 0.6)";
         ctx.lineWidth = 3;
         ctx.strokeText(activeSub.translation, width / 2, transY);
-        
+
         ctx.fillStyle = "rgba(255, 255, 255, 0.9)";
         ctx.fillText(activeSub.translation, width / 2, transY);
         ctx.shadowBlur = 0;
@@ -980,10 +980,13 @@ export const exportVideoWithFFmpeg = async (
     },
   },
 ): Promise<Blob> => {
-  const WIDTH = config.orientation === "landscape" ? 1920 : 1080;
-  const HEIGHT = config.orientation === "landscape" ? 1080 : 1920;
-  const FPS = 30;
-  const BATCH_SIZE = 60; // Upload every 60 frames (2 seconds)
+  // OPTIMIZATION: Render at 720p instead of 1080p - 56% fewer pixels!
+  // Use exact 1280x720 (standard 720p) to ensure even dimensions for libx264
+  const WIDTH = config.orientation === "landscape" ? 1280 : 720;
+  const HEIGHT = config.orientation === "landscape" ? 720 : 1280;
+  const FPS = 24; // Optimized: 24 FPS (cinema standard) reduces frame count by 20%
+  const JPEG_QUALITY = 0.75; // Optimized: Lower quality for faster encoding
+  const BATCH_SIZE = 48; // Upload every 48 frames (2 seconds at 24 FPS)
 
   onProgress({
     stage: "preparing",
@@ -1082,11 +1085,12 @@ export const exportVideoWithFFmpeg = async (
     message: "Rendering cinematic frames...",
   });
 
-  // 5. Create canvas
+  // 5. Create canvas with optimized context
   const canvas = document.createElement("canvas");
   canvas.width = WIDTH;
   canvas.height = HEIGHT;
-  const ctx = canvas.getContext("2d")!;
+  // willReadFrequently hint optimizes canvas readback performance
+  const ctx = canvas.getContext("2d", { willReadFrequently: true })!;
 
   // Polyfill roundRect
   applyPolyfills(ctx);
@@ -1115,7 +1119,7 @@ export const exportVideoWithFFmpeg = async (
     previousFreqData = freqData;
 
     const blob = await new Promise<Blob>((resolve) => {
-      canvas.toBlob((b) => resolve(b!), "image/jpeg", 0.9);
+      canvas.toBlob((b) => resolve(b!), "image/jpeg", JPEG_QUALITY);
     });
 
     // Add to buffer
@@ -1222,9 +1226,12 @@ export const exportVideoClientSide = async (
     },
   },
 ): Promise<Blob> => {
-  const WIDTH = config.orientation === "landscape" ? 1920 : 1080;
-  const HEIGHT = config.orientation === "landscape" ? 1080 : 1920;
-  const FPS = 30;
+  // OPTIMIZATION: Render at 720p instead of 1080p - 56% fewer pixels!
+  // Use exact 1280x720 (standard 720p) to ensure even dimensions for libx264
+  const WIDTH = config.orientation === "landscape" ? 1280 : 720;
+  const HEIGHT = config.orientation === "landscape" ? 720 : 1280;
+  const FPS = 24; // Optimized: 24 FPS (cinema standard) reduces frame count by 20%
+  const JPEG_QUALITY = 0.75; // Optimized: Lower quality for faster encoding
 
   onProgress({
     stage: "loading",
@@ -1327,11 +1334,12 @@ export const exportVideoClientSide = async (
     message: "Rendering frames...",
   });
 
-  // 4. Create canvas
+  // 4. Create canvas with optimized context
   const canvas = document.createElement("canvas");
   canvas.width = WIDTH;
   canvas.height = HEIGHT;
-  const ctx = canvas.getContext("2d")!;
+  // willReadFrequently hint optimizes canvas readback performance
+  const ctx = canvas.getContext("2d", { willReadFrequently: true })!;
 
   // Polyfill roundRect
   applyPolyfills(ctx);
@@ -1361,7 +1369,7 @@ export const exportVideoClientSide = async (
     // We use a lower quality JPEG for speed in WASM, or PNG for quality.
     // JPEG is much faster to encode.
     const blob = await new Promise<Blob>((resolve) => {
-      canvas.toBlob((b) => resolve(b!), "image/jpeg", 0.9);
+      canvas.toBlob((b) => resolve(b!), "image/jpeg", JPEG_QUALITY);
     });
 
     const frameName = `frame${frame.toString().padStart(6, "0")}.jpg`;

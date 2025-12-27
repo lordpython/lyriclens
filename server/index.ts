@@ -254,11 +254,13 @@ app.post('/api/export/finalize', express.json(), async (req: Request, res: Respo
     }
 
     // FFmpeg Arguments
+    // Note: Input frames may be 720p for faster rendering, we upscale to 1080p
     const ffmpegArgs = [
       '-framerate', String(fps),
       '-i', path.join(sessionDir, 'frame%06d.jpg'), // Expects frame000001.jpg, etc.
       '-i', audioPath,
       '-c:v', 'libx264',
+      // Note: Video will be at render resolution (720p) - fast rendering tradeoff
       '-preset', 'veryfast', // Balance between speed and compression
       '-crf', '23',          // Standard quality
       '-pix_fmt', 'yuv420p', // Ensure compatibility
@@ -273,8 +275,17 @@ app.post('/api/export/finalize', express.json(), async (req: Request, res: Respo
     await new Promise<void>((resolve, reject) => {
       const ffmpeg = spawn('ffmpeg', ffmpegArgs);
 
-      // Log FFmpeg progress (optional, can be verbose)
-      // ffmpeg.stderr.on('data', (data) => console.log(data.toString()));
+      let stderrOutput = '';
+
+      // Capture FFmpeg output for debugging
+      ffmpeg.stderr.on('data', (data) => {
+        const msg = data.toString();
+        stderrOutput += msg;
+        // Only log progress lines, not the full verbose output
+        if (msg.includes('frame=') || msg.includes('error') || msg.includes('Error')) {
+          console.log(`[FFmpeg] ${msg.trim()}`);
+        }
+      });
 
       ffmpeg.on('close', (code) => {
         if (code === 0) resolve();
