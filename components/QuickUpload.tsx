@@ -220,7 +220,7 @@ export const QuickUpload: React.FC<QuickUploadProps> = ({
             disabled={isImporting || disabled || !youtubeUrl.trim()}
             className={cn(
               "h-11 px-5",
-              "bg-gradient-to-r from-red-600 to-red-500",
+              "bg-linear-to-r from-red-600 to-red-500",
               "hover:from-red-500 hover:to-red-400",
               "text-white font-semibold",
               "disabled:opacity-50",
