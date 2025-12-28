@@ -1,8 +1,10 @@
 import React, { useState, useCallback } from "react";
 import { motion } from "framer-motion";
-import { Upload, Music, Monitor, Smartphone, Sparkles, ChevronRight } from "lucide-react";
+import { Upload, Music, Monitor, Smartphone, Sparkles, ChevronRight, Youtube, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
+import { SERVER_URL } from "@/services/ffmpegService";
 
 interface QuickUploadProps {
   onFileSelect: (file: File, aspectRatio: string) => void;
@@ -17,6 +19,8 @@ export const QuickUpload: React.FC<QuickUploadProps> = ({
 }) => {
   const [aspectRatio, setAspectRatio] = useState<"16:9" | "9:16">("16:9");
   const [isDragging, setIsDragging] = useState(false);
+  const [youtubeUrl, setYoutubeUrl] = useState("");
+  const [isImporting, setIsImporting] = useState(false);
 
   const handleDrop = useCallback(
     (e: React.DragEvent) => {
@@ -40,6 +44,37 @@ export const QuickUpload: React.FC<QuickUploadProps> = ({
     },
     [onFileSelect, aspectRatio]
   );
+
+  const handleYoutubeImport = async () => {
+    if (!youtubeUrl.trim() || isImporting) return;
+
+    setIsImporting(true);
+    try {
+      const response = await fetch(`${SERVER_URL}/api/import/youtube`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url: youtubeUrl }),
+      });
+
+      if (!response.ok) {
+        throw new Error("Failed to import from YouTube");
+      }
+
+      const blob = await response.blob();
+      const file = new File([blob], "youtube_audio.mp3", {
+        type: "audio/mpeg",
+      });
+      onFileSelect(file, aspectRatio);
+    } catch (error) {
+      console.error(error);
+      alert(
+        "Failed to import YouTube video. Make sure the backend server is running (npm run server) and yt-dlp is installed.",
+      );
+    } finally {
+      setIsImporting(false);
+      setYoutubeUrl("");
+    }
+  };
 
   return (
     <motion.div
@@ -143,6 +178,68 @@ export const QuickUpload: React.FC<QuickUploadProps> = ({
 
       {/* Demo Button */}
       <div className="relative w-full my-6">
+        <div className="absolute inset-0 flex items-center">
+          <span className="w-full border-t border-border/50" />
+        </div>
+        <div className="relative flex justify-center">
+          <span className="bg-background px-3 text-xs text-muted-foreground">or</span>
+        </div>
+      </div>
+
+      {/* YouTube Import */}
+      <div className="w-full space-y-3 mb-6">
+        <div className="flex gap-2">
+          <div className="relative flex-1">
+            <Youtube
+              className={cn(
+                "absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 transition-colors",
+                youtubeUrl ? "text-red-500" : "text-muted-foreground",
+              )}
+            />
+            <Input
+              type="text"
+              value={youtubeUrl}
+              onChange={(e) => setYoutubeUrl(e.target.value)}
+              placeholder="Paste YouTube URL..."
+              className={cn(
+                "pl-10 h-11",
+                "bg-background/50 border-border/50",
+                "focus:border-red-500/50 focus:ring-red-500/20",
+                "placeholder:text-muted-foreground/50",
+              )}
+              disabled={isImporting || disabled}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  handleYoutubeImport();
+                }
+              }}
+            />
+          </div>
+          <Button
+            onClick={handleYoutubeImport}
+            disabled={isImporting || disabled || !youtubeUrl.trim()}
+            className={cn(
+              "h-11 px-5",
+              "bg-gradient-to-r from-red-600 to-red-500",
+              "hover:from-red-500 hover:to-red-400",
+              "text-white font-semibold",
+              "disabled:opacity-50",
+            )}
+          >
+            {isImporting ? (
+              <Loader2 className="w-4 h-4 animate-spin" />
+            ) : (
+              "Import"
+            )}
+          </Button>
+        </div>
+        <p className="text-[10px] text-muted-foreground/60 text-center">
+          Requires backend server (npm run server) with yt-dlp installed
+        </p>
+      </div>
+
+      {/* Another divider */}
+      <div className="relative w-full mb-6">
         <div className="absolute inset-0 flex items-center">
           <span className="w-full border-t border-border/50" />
         </div>

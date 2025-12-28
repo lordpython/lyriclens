@@ -5,8 +5,10 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:host": "vite --host",
     "server": "npx tsx server/index.ts",
     "dev:all": "concurrently \"npm run dev\" \"npm run server\"",
+    "dev:all:host": "concurrently \"npm run dev:host\" \"npm run server\"",
     "test": "npx tsx test/runTest.ts",
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui",
